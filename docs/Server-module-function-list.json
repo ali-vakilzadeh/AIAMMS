@@ -1,0 +1,537 @@
+{
+  "meta": {
+    "title": "CMMS SaaS Server - Module Function Specification (Source of Truth)",
+    "version": "1.0",
+    "language": "Python 3.11+",
+    "stack": ["FastAPI", "SQLAlchemy 2 (async)", "Pydantic v2", "Celery + Beat", "Redis 7", "PostgreSQL 15 + pgvector", "MinIO/S3", "MCP Python SDK"],
+    "module_count": 21,
+    "conventions": {
+      "build_rule": "Modules are listed in strict build priority. A module may only call functions of modules with LOWER priority number, or communicate via events. Never import a later module.",
+      "signature_syntax": "name(param: Type, ...) -> ReturnType",
+      "request_context": "Every domain service function takes ctx: RequestContext as first param. RequestContext = {org_id: UUID, user_id: UUID, role: Role, request_id: str, timezone: str|None}. HTTP routes build it from the verified JWT.",
+      "ids": "UUID v4",
+      "timestamps": "ISO 8601 UTC; stored as timestamptz; user timezone applied at display only",
+      "pagination": "Page[T] = {items: list[T], page: int, page_size: int, total: int}",
+      "http_error_envelope": "{error_code: str, message: str, details: dict}",
+      "events": "Dot-delimited names; published via core.publish(); consumers never know producers",
+      "rls": "All tenant queries run inside db.org_scoped_session(org_id)",
+      "routes": "Functions marked 'route' are FastAPI endpoints under /api/v1 that validate input (Pydantic) then delegate to the same-named service function",
+      "tasks": "Functions marked 'task' are Celery tasks registered via WORKER; 'beat' adds a schedule",
+      "soft_delete": "No hard deletes of business records; deleted_at + is_active + lifecycle_status",
+      "audit": "Functions marked 'audited' emit an audit event consumed by AUDIT module"
+    },
+    "types": {
+      "Role": "SYS_ADMIN | MANAGER | REPORTER | OPERATOR | MAINTENANCE",
+      "HealthReport": "{module: str, status: OK|DEGRADED|UNAVAILABLE, checks: [{name, status, latency_ms, detail}], ts: datetime}",
+      "RetryPolicy": "{max_retries: int, backoff_base: float, retry_on: list[type]}",
+      "TemplateSnapshot": "{template_id: UUID, kind: workflow|checklist, code: str, items: list[WorkItemSnapshot], frozen_at: datetime}",
+      "SendResult": "{id: str, status: sent|queued|failed, error: str|None}"
+    }
+  },
+
+  "modules": [
+
+    {
+      "priority": 1, "module": "core", "wave": 0, "path": "core/",
+      "purpose": "Microkernel: boots, wires, supervises and health-checks all modules. ZERO CMMS business logic.",
+      "depends_on": [], "tables": [], "events_emitted": ["module.health_changed"],
+      "done_when": ["Can boot a dummy module set in dependency order", "Detects dependency cycles and fails fast", "Event bus isolates subscriber failures", "Health aggregation returns per-module reports"],
+      "functions": [
+        {"id":"CORE-01","fn":"discover_modules","sig":"discover_modules(package_root: str = 'modules') -> list[ModuleMeta]","in":{"package_root":"python package to scan"},"out":"list[ModuleMeta{name, version, dependencies, optional_dependencies, profiles}]","does":"Import every subpackage, collect classes subclassing ModuleBase, return their metadata. Duplicate module names raise."},
+        {"id":"CORE-02","fn":"validate_dependency_graph","sig":"validate_dependency_graph(modules: list[ModuleMeta]) -> None","in":{"modules":"discovered metadata"},"out":"None","does":"Verify all declared dependencies exist and the graph is acyclic. Raise DependencyCycleError(cycle_path) or UnknownDependencyError."},
+        {"id":"CORE-03","fn":"topological_order","sig":"topological_order(modules: list[ModuleMeta]) -> list[str]","in":{"modules":"validated metadata"},"out":"list[str] module names in start order","does":"Kahn's algorithm; deterministic alphabetical tie-break."},
+        {"id":"CORE-04","fn":"boot","sig":"boot(profile: str) -> Application","in":{"profile":"api | worker | beat | mcp | all-in-one"},"out":"Application{registry, bus, settings, started_modules}","does":"Load settings, init logging, discover -> validate -> sort -> filter modules whose profiles include this profile, then run configure() -> initialize(ctx) -> start() in order. Log each module name+version."},
+        {"id":"CORE-05","fn":"shutdown","sig":"shutdown(app: Application) -> None","in":{"app":"booted application"},"out":"None","does":"Stop modules in reverse topological order; each module drains in-flight work; close pools; flush logs. Non-zero exit if any module failed to stop."},
+        {"id":"CORE-06","fn":"register_service","sig":"register_service(name: str, port: Any, interface: type) -> None","in":{"name":"port name e.g. 'storage'","port":"implementation object","interface":"Protocol/type to validate against"},"out":"None","does":"Publish a typed port to the registry. Raise on duplicate name or interface mismatch."},
+        {"id":"CORE-07","fn":"get_service","sig":"get_service(name: str, interface: type) -> Any","in":{"name":"port name","interface":"expected Protocol"},"out":"the registered port instance","does":"Lookup + type check. Raise ServiceNotRegistered / InterfaceMismatch. This is the ONLY cross-module call mechanism."},
+        {"id":"CORE-08","fn":"publish","sig":"async publish(event: str, payload: dict, post_commit: bool = False) -> None","in":{"event":"e.g. 'cycle.due'","payload":"JSON-serializable dict","post_commit":"if True deliver only after current DB transaction commits"},"out":"None","does":"Dispatch to all subscribers. Each subscriber runs in isolated try/except; a failing listener never breaks the publisher or other listeners."},
+        {"id":"CORE-09","fn":"subscribe","sig":"subscribe(event: str, handler: Callable, post_commit: bool = False) -> None","in":{"event":"event name or '*' wildcard","handler":"async callable(payload)"},"out":"None","does":"Register listener. Wildcard used by AUDIT. Raise on duplicate (event, handler) pair."},
+        {"id":"CORE-10","fn":"load_settings","sig":"load_settings() -> SettingsBundle","in":{},"out":"SettingsBundle with per-module validated settings","does":"Parse env vars CMMS_<MODULE>__<KEY>; validate each module's pydantic Settings; fail boot with field-level error list on invalid config. Secrets never logged."},
+        {"id":"CORE-11","fn":"module_settings","sig":"module_settings(name: str) -> BaseSettings","in":{"name":"module name"},"out":"that module's settings object","does":"Accessor used by modules during configure()."},
+        {"id":"CORE-12","fn":"get_logger","sig":"get_logger(name: str) -> Logger","in":{"name":"module name"},"out":"structured JSON logger with field module=name","does":"Namespaced logging; request_id correlation injected by API middleware."},
+        {"id":"CORE-13","fn":"utcnow / new_id / new_request_id","sig":"utcnow() -> datetime; new_id() -> UUID; new_request_id() -> str","in":{},"out":"UTC now (tz-aware) / UUID4 / short unique id","does":"Single clock and id source for the whole server; no module may call datetime.now() directly."},
+        {"id":"CORE-14","fn":"poll_health","sig":"async poll_health(timeout_s: float = 2.0) -> dict[str, HealthReport]","in":{"timeout_s":"per-module timeout"},"out":"map module -> HealthReport","does":"Call every started module's health() concurrently; timed-out modules reported UNAVAILABLE."},
+        {"id":"CORE-15","fn":"supervise","sig":"async supervise(interval_s: int = 30) -> None","in":{"interval_s":"poll period"},"out":"None","does":"Background loop: poll_health -> propagate degradation (dependent modules become DEGRADED if a hard dep is UNAVAILABLE) -> apply restart policy per module config -> emit module.health_changed on transitions."},
+        {"id":"CORE-16","fn":"feature_enabled","sig":"feature_enabled(flag: str) -> bool","in":{"flag":"flag name"},"out":"bool","does":"Read CMMS_FEATURE_<FLAG> env (default false). Used for staged rollouts (e.g. MCP)."}
+      ]
+    },
+
+    {
+      "priority": 2, "module": "db", "wave": 1, "path": "modules/db/",
+      "purpose": "PostgreSQL access: engine, sessions, RLS context, migrations, pgvector bootstrap.",
+      "depends_on": ["core"], "tables": [], "events_emitted": [],
+      "done_when": ["org_scoped_session sets app.organization_id and RLS applies", "pool health reported", "alembic migrations run programmatically"],
+      "functions": [
+        {"id":"DB-01","fn":"build_engine","sig":"build_engine() -> AsyncEngine","in":{},"out":"SQLAlchemy AsyncEngine","does":"Create async engine from CMMS_DB__URL with POOL_SIZE, MAX_OVERFLOW, POOL_TIMEOUT, STATEMENT_TIMEOUT. Called once at initialize()."},
+        {"id":"DB-02","fn":"session_factory","sig":"session_factory() -> async_sessionmaker[AsyncSession]","in":{},"out":"session factory","does":"Raw (platform-level) sessions for auth/platform tables before org context exists."},
+        {"id":"DB-03","fn":"org_scoped_session","sig":"org_scoped_session(org_id: UUID) -> AsyncContextManager[AsyncSession]","in":{"org_id":"tenant id"},"out":"async context manager yielding a session","does":"On BEGIN execute SET LOCAL app.organization_id = :org so PostgreSQL RLS policies filter every query. All domain modules MUST use this. Raise if org_id missing."},
+        {"id":"DB-04","fn":"ensure_extensions","sig":"async ensure_extensions() -> None","in":{},"out":"None","does":"CREATE EXTENSION IF NOT EXISTS vector, pgcrypto, citext."},
+        {"id":"DB-05","fn":"run_migrations","sig":"run_migrations(revision: str = 'head') -> None","in":{"revision":"alembic target"},"out":"None","does":"Programmatic alembic upgrade; migrations live in migrations/ stamped per owning module."},
+        {"id":"DB-06","fn":"transaction","sig":"transaction(session: AsyncSession) -> AsyncContextManager[None]","in":{"session":"active session"},"out":"context manager","does":"commit on success, rollback on exception, always close. Standardizes unit-of-work."},
+        {"id":"DB-07","fn":"register_models","sig":"register_models(module_name: str, base: DeclarativeBase) -> None","in":{"module_name":"owning module","base":"module's model classes"},"out":"None","does":"Collect models for migration autogeneration; enforce every tenant table has organization_id column."},
+        {"id":"DB-08","fn":"health_check","sig":"async health_check() -> HealthReport","in":{},"out":"HealthReport","does":"SELECT 1 probe; report pool checkedout/size saturation; DEGRADED >80%, UNAVAILABLE on connection failure."}
+      ]
+    },
+
+    {
+      "priority": 3, "module": "api", "wave": 1, "path": "modules/api/",
+      "purpose": "HTTP surface: FastAPI factory, router registry, middleware chain, error envelope, pagination. Serves NO static files.",
+      "depends_on": ["core"], "tables": [], "events_emitted": [],
+      "done_when": ["Modules can mount routers under /api/v1", "middleware chain order fixed", "standard error envelope on all exceptions"],
+      "functions": [
+        {"id":"API-01","fn":"create_app","sig":"create_app() -> FastAPI","in":{},"out":"FastAPI app","does":"App factory with title/version, OpenAPI at /api/v1/openapi.json (toggle CMMS_API__OPENAPI_ENABLED), central exception handlers. No static file mounts (UI is hosted elsewhere)."},
+        {"id":"API-02","fn":"register_router","sig":"register_router(router: APIRouter, prefix: str, tags: list[str]) -> None","in":{"router":"FastAPI APIRouter","prefix":"e.g. '/auth'","tags":"OpenAPI tags"},"out":"None","does":"Mount under /api/v1. Raise on duplicate prefix."},
+        {"id":"API-03","fn":"add_middleware","sig":"add_middleware(factory: Callable, order: int) -> None","in":{"factory":"middleware factory","order":"position in chain"},"out":"None","does":"Register middleware; chain sorted by order at startup."},
+        {"id":"API-04","fn":"install_middleware_chain","sig":"install_middleware_chain() -> None","in":{},"out":"None","does":"Fixed order: request_id(10) -> cors(20) -> auth hook(30) -> org_scope hook(40) -> rate_limit(50). AUTH and TENANCY inject their hooks via add_middleware."},
+        {"id":"API-05","fn":"error_handler","sig":"error_handler(request: Request, exc: Exception) -> JSONResponse","in":{"exc":"any exception"},"out":"JSONResponse {error_code, message, details}","does":"Map typed domain exceptions to status codes (QuotaExceeded->403 TIER_LIMIT_REACHED, NotFound->404, Forbidden->403, PaymentOverdue->403 ORG_PAYMENT_OVERDUE...). Never leak stack traces; log full detail server-side with request_id."},
+        {"id":"API-06","fn":"paginate","sig":"paginate(stmt: Select, page: int = 1, page_size: int = 50) -> Page","in":{"stmt":"select statement","page":">=1","page_size":"1..200"},"out":"Page{items, page, page_size, total}","does":"Apply LIMIT/OFFSET + COUNT; clamp page_size."},
+        {"id":"API-07","fn":"require","sig":"require(action: str, resource: str | None = None) -> Callable","in":{"action":"e.g. 'work_order.reject'","resource":"optional object type"},"out":"FastAPI dependency","does":"Endpoint guard delegating to AUTH.rbac_can(ctx, action, resource); 403 envelope on denial."},
+        {"id":"API-08","fn":"request_context","sig":"request_context() -> Callable[..., RequestContext]","in":{},"out":"FastAPI dependency yielding RequestContext","does":"Extract verified claims (set by AUTH hook) into RequestContext for handlers."},
+        {"id":"API-09","fn":"cors_config","sig":"cors_config() -> CORSMiddleware","in":{},"out":"configured CORS middleware","does":"Allow origins from CMMS_API__CORS_ORIGINS (web UI server + mobile), credentials true (refresh cookie), restrict methods/headers."},
+        {"id":"API-10","fn":"serve","sig":"serve(host: str, port: int, workers: int) -> None","in":{"host":"bind","port":"bind","workers":"uvicorn worker count"},"out":"None","does":"Entrypoint helper running uvicorn with the assembled app."}
+      ]
+    },
+
+    {
+      "priority": 4, "module": "cache", "wave": 1, "path": "modules/cache/",
+      "purpose": "Redis services: rate limiting, distributed locks, delayed queues, KV, broker URL.",
+      "depends_on": ["core"], "tables": [], "events_emitted": [],
+      "done_when": ["sliding-window rate limiter works", "lock is safe-release", "delayed queue dispatches due jobs"],
+      "functions": [
+        {"id":"CACHE-01","fn":"connect","sig":"connect() -> Redis","in":{},"out":"async Redis client","does":"Connect using CMMS_CACHE__URL; connection pool; retry on startup."},
+        {"id":"CACHE-02","fn":"allow","sig":"async allow(key: str, limit: int, window_s: int) -> RateDecision","in":{"key":"e.g. 'rl:user:{id}:ai'","limit":"max calls","window_s":"window seconds"},"out":"RateDecision{allowed: bool, remaining: int, reset_at: datetime}","does":"Sliding-window rate limit (sorted set or INCR+EXPIRE). Consumed by API middleware, AI and MCP limits."},
+        {"id":"CACHE-03","fn":"lock","sig":"lock(name: str, ttl_s: int, wait_ms: int = 0) -> AsyncContextManager[bool]","in":{"name":"lock name","ttl_s":"auto-release","wait_ms":"optional wait"},"out":"context manager; acquired bool","does":"SET NX PX; release via Lua compare-and-delete (safe release). Used for cycle idempotency and MCP batch ops."},
+        {"id":"CACHE-04","fn":"delay_schedule","sig":"async delay_schedule(task_name: str, payload: dict, run_at: datetime) -> str","in":{"task_name":"worker task","payload":"args","run_at":"UTC datetime"},"out":"job_id","does":"ZADD score=timestamp. Powers snooze expiration and scheduled reminders."},
+        {"id":"CACHE-05","fn":"delay_due","sig":"async delay_due(now: datetime) -> list[DelayedJob]","in":{"now":"UTC"},"out":"list[DelayedJob{job_id, task_name, payload}]","does":"Atomically pop all entries with score <= now (ZPOPMIN loop). Called by a beat task which dispatches them to WORKER."},
+        {"id":"CACHE-06","fn":"kv_get / kv_set / kv_delete","sig":"async kv_get(key: str) -> str|None; async kv_set(key: str, value: str, ttl_s: int|None) -> None; async kv_delete(key: str) -> None","in":{"key":"string","value":"string","ttl_s":"optional expiry"},"out":"stored value / None","does":"Short-lived cache (e.g. unread notification badge)."},
+        {"id":"CACHE-07","fn":"broker_url","sig":"broker_url() -> str","in":{},"out":"redis URL","does":"Provides Celery broker/result URL to WORKER."},
+        {"id":"CACHE-08","fn":"health_check","sig":"async health_check() -> HealthReport","in":{},"out":"HealthReport","does":"PING + latency + memory usage; UNAVAILABLE on connection failure."}
+      ]
+    },
+
+    {
+      "priority": 5, "module": "storage", "wave": 1, "path": "modules/storage/",
+      "purpose": "Byte-level object storage behind a swappable backend (local | minio | s3). Tenant-scoped keys enforced centrally.",
+      "depends_on": ["core"], "tables": [], "events_emitted": [],
+      "done_when": ["same code works against local fs and MinIO", "tenant key policy cannot be bypassed", "presigned URLs short-lived"],
+      "functions": [
+        {"id":"STO-01","fn":"backend","sig":"backend() -> StorageBackend","in":{},"out":"active backend instance","does":"Select adapter by CMMS_STORAGE__BACKEND (local|minio|s3). Adapters: LocalBackend, MinioBackend, S3Backend implementing identical Protocol."},
+        {"id":"STO-02","fn":"tenant_key","sig":"tenant_key(org_id: UUID, category: str, *parts: str) -> str","in":{"category":"attachments|manuals|exports|qr|ai-artifacts","parts":"path segments"},"out":"key '/org-{org_id}/{category}/...'","does":"Single key builder; rejects '..' and absolute segments (path traversal). All modules MUST use it."},
+        {"id":"STO-03","fn":"put","sig":"async put(key: str, stream: AsyncIterator[bytes], mime: str, max_bytes: int) -> StoredObject","in":{"key":"tenant key","stream":"content","mime":"validated mime","max_bytes":"hard cap"},"out":"StoredObject{key, size, etag}","does":"Stream-upload; abort + raise SIZE_EXCEEDED if max_bytes crossed mid-stream."},
+        {"id":"STO-04","fn":"get","sig":"async get(key: str) -> AsyncIterator[bytes]","in":{"key":"tenant key"},"out":"byte stream","does":"Stream download; raise NotFound if absent."},
+        {"id":"STO-05","fn":"delete","sig":"async delete(key: str) -> bool","in":{"key":"tenant key"},"out":"True if removed","does":"Delete object; idempotent."},
+        {"id":"STO-06","fn":"exists","sig":"async exists(key: str) -> bool","in":{"key":"tenant key"},"out":"bool","does":"Head object."},
+        {"id":"STO-07","fn":"presigned_url","sig":"async presigned_url(key: str, ttl_s: int = 900, method: str = 'GET') -> str","in":{"ttl_s":"short-lived","method":"GET|PUT"},"out":"URL string","does":"Backend presign; local backend returns signed internal app URL. Default TTL 15 min, max 1h."},
+        {"id":"STO-08","fn":"sniff_mime","sig":"sniff_mime(head: bytes) -> str","in":{"head":"first 2048 bytes"},"out":"mime type","does":"Content-based magic detection (python-magic) independent of client claim."},
+        {"id":"STO-09","fn":"health_check","sig":"async health_check() -> HealthReport","in":{},"out":"HealthReport","does":"Write -> read -> delete probe object under probe/ path."}
+      ]
+    },
+
+    {
+      "priority": 6, "module": "email", "wave": 1, "path": "modules/email/",
+      "purpose": "Transactional email ONLY (verification, password reset, invitations). Provider-swappable.",
+      "depends_on": ["core"], "tables": [], "events_emitted": [],
+      "done_when": ["smtp and api adapters pass same contract test", "templates render html+text"],
+      "functions": [
+        {"id":"EML-01","fn":"provider","sig":"provider() -> EmailProvider","in":{},"out":"active provider adapter","does":"Select by CMMS_EMAIL__PROVIDER (smtp|api). Adapters implement send()."},
+        {"id":"EML-02","fn":"render","sig":"render(template: str, vars: dict) -> RenderedEmail","in":{"template":"verify_email|password_reset|invitation","vars":"placeholders (name, link, expiry)"},"out":"RenderedEmail{subject, html, text}","does":"Render both HTML and plain-text bodies from templates stored in module."},
+        {"id":"EML-03","fn":"send","sig":"async send(to: str, subject: str, html: str, text: str) -> SendResult","in":{"to":"recipient","subject":"subject","html":"html body","text":"plain body"},"out":"SendResult","does":"Send with 3 retries exponential backoff; redact addresses in logs except domain; record provider message id."},
+        {"id":"EML-04","fn":"send_template","sig":"async send_template(template: str, to: str, vars: dict) -> SendResult","in":{"template":"template name","to":"recipient","vars":"render vars"},"out":"SendResult","does":"render() + send(). The only entrypoint used by AUTH/TENANCY."},
+        {"id":"EML-05","fn":"health_check","sig":"async health_check() -> HealthReport","in":{},"out":"HealthReport","does":"Provider handshake/dry-run capability probe."}
+      ]
+    },
+
+    {
+      "priority": 7, "module": "auth", "wave": 2, "path": "modules/auth/",
+      "purpose": "Identity, JWT lifecycle, password flows, RBAC engine. Feeds auth hook into API.",
+      "depends_on": ["core","db","cache","email","api"], "tables": ["users","roles","user_organization_memberships(read)","auth_refresh_tokens","email_verification_tokens","password_reset_tokens"],
+      "events_emitted": ["user.registered","user.verified","user.logged_in","user.password_reset","user.role_changed","user.deactivated"],
+      "done_when": ["signup->verify->login->refresh->logout works", "refresh rotation detects reuse", "RBAC matrix enforced on endpoints"],
+      "functions": [
+        {"id":"AUTH-01","fn":"signup","sig":"signup(email: EmailStr, password: str, timezone: str = 'UTC') -> User","route":"POST /auth/signup","in":{"email":"unique email","password":"plain, policy-checked","timezone":"IANA tz"},"out":"User{id, email, verified:false}","does":"Validate password policy; hash; create unverified user; create single-use verification token (24h); send verify_email template; emit user.registered. Always 201 without leaking existence on duplicate (message generic)."},
+        {"id":"AUTH-02","fn":"verify_email","sig":"verify_email(token: str) -> None","route":"POST /auth/verify-email","in":{"token":"verification token"},"out":"None (204)","does":"Validate single-use time-limited token; mark user verified; emit user.verified. Invalid/expired -> 400."},
+        {"id":"AUTH-03","fn":"login","sig":"login(email: EmailStr, password: str) -> TokenPair","route":"POST /auth/login","in":{"email":"email","password":"plain"},"out":"{access_token: JWT(15m), refresh_token set as HttpOnly Secure cookie(7d)}","does":"Verify credentials; block unverified or deactivated users; rate-limit via CACHE (strict); issue JWT claims {sub, organization_id, role, jti, exp}; issue refresh token family row; emit user.logged_in with ip/user_agent."},
+        {"id":"AUTH-04","fn":"refresh","sig":"refresh(refresh_cookie: str) -> TokenPair","route":"POST /auth/refresh","in":{"refresh_cookie":"HttpOnly cookie"},"out":"new rotated pair","does":"Rotation: invalidate presented token, issue new one in same family. REUSE detection (already-rotated token presented) -> invalidate entire family + force re-login."},
+        {"id":"AUTH-05","fn":"logout","sig":"logout() -> None","route":"POST /auth/logout","in":{},"out":"204","does":"Revoke current refresh token family; clear cookie."},
+        {"id":"AUTH-06","fn":"forgot_password","sig":"forgot_password(email: EmailStr) -> None","route":"POST /auth/forgot-password","in":{"email":"email"},"out":"200 always","does":"If user exists: single-use reset token (30 min) + email. Constant response to prevent enumeration. Rate-limited."},
+        {"id":"AUTH-07","fn":"reset_password","sig":"reset_password(token: str, new_password: str) -> None","route":"POST /auth/reset-password","in":{"token":"reset token","new_password":"policy-checked"},"out":"204","does":"Validate token; update hash; invalidate all sessions of user; mark token used; emit user.password_reset."},
+        {"id":"AUTH-08","fn":"me","sig":"me(ctx: RequestContext) -> Profile","route":"GET /auth/me","in":{"ctx":"context"},"out":"Profile{user, membership, organization, role, permissions[]}","does":"Return identity + effective role + permission list for UI gating."},
+        {"id":"AUTH-09","fn":"issue_access_token","sig":"issue_access_token(user_id: UUID, org_id: UUID, role: Role) -> str","in":{},"out":"signed JWT, exp=15m","does":"HS256 with CMMS_JWT_SECRET; claims sub/organization_id/role/jti/exp/iat. Used by login and MCP auth bridge."},
+        {"id":"AUTH-10","fn":"verify_access_token","sig":"verify_access_token(token: str) -> Claims","in":{"token":"JWT"},"out":"Claims","does":"Verify signature/exp/jti-not-revoked; return claims; raise Unauthorized on any failure. Shared by API hook and MCP."},
+        {"id":"AUTH-11","fn":"hash_password / verify_password","sig":"hash_password(pw: str) -> str; verify_password(pw: str, hashed: str) -> bool","in":{},"out":"argon2id hash / bool","does":"Argon2id with tuned params; constant-time compare."},
+        {"id":"AUTH-12","fn":"password_policy","sig":"password_policy(pw: str) -> list[str]","in":{"pw":"candidate"},"out":"list of violation codes","does":"Min 10 chars, upper+lower+digit+symbol; reject breached list."},
+        {"id":"AUTH-13","fn":"rbac_can","sig":"rbac_can(ctx: RequestContext, action: str, resource: str | None = None) -> bool","in":{"action":"permission key","resource":"object-level check optional"},"out":"bool","does":"Permission matrix (role x action) + object-level rules (e.g. only issuer accepts ticket). Deactivated users -> always False for new actions."},
+        {"id":"AUTH-14","fn":"require_roles","sig":"require_roles(*roles: Role) -> Callable","in":{"roles":"allowed roles"},"out":"FastAPI dependency","does":"403 unless ctx.role in roles."},
+        {"id":"AUTH-15","fn":"auth_hook","sig":"auth_hook(request: Request) -> Claims | None","in":{"request":"inbound"},"out":"Claims or None (public routes)","does":"Middleware registered into API order 30: extract Bearer token -> verify_access_token -> store claims on request.state; public route list bypasses."},
+        {"id":"AUTH-16","fn":"invalidate_user_sessions","sig":"invalidate_user_sessions(user_id: UUID) -> int","in":{"user_id":"target"},"out":"count revoked","does":"Revoke all refresh families + add active jti to revocation list (CACHE kv with TTL=access token lifetime)."},
+        {"id":"AUTH-17","fn":"change_role","sig":"change_role(ctx: RequestContext, user_id: UUID, new_role: Role) -> Membership","route":"PATCH /auth/roles (MANAGER/SYS_ADMIN only)","in":{"user_id":"member","new_role":"target role"},"out":"updated membership","does":"Restricted role change; cannot grant SYS_ADMIN via org APIs; audited; emit user.role_changed."},
+        {"id":"AUTH-18","fn":"deactivate_user","sig":"deactivate_user(ctx: RequestContext, user_id: UUID) -> None","in":{"user_id":"member"},"out":"None","does":"Block new actions/assignments; retain history; invalidate sessions; audited; emit user.deactivated."},
+        {"id":"AUTH-19","fn":"sweep_expired_tokens","sig":"sweep_expired_tokens() -> int","task":true,"beat":"daily","in":{},"out":"rows purged","does":"Delete expired verification/reset/refresh rows."}
+      ]
+    },
+
+    {
+      "priority": 8, "module": "worker", "wave": 2, "path": "modules/worker/",
+      "purpose": "Celery engine: task registry, beat registry, idempotency, retries, dead-letter, observability hooks.",
+      "depends_on": ["core","cache"], "tables": [], "events_emitted": [],
+      "done_when": ["modules contribute tasks+beat schedules", "idempotency key prevents duplicate runs", "failed jobs inspectable"],
+      "functions": [
+        {"id":"WRK-01","fn":"create_celery_app","sig":"create_celery_app() -> Celery","in":{},"out":"Celery app","does":"Broker+result from CACHE.broker_url(); JSON serializer; task time limits from config; worker signals wired to logging."},
+        {"id":"WRK-02","fn":"register_task","sig":"register_task(name: str, fn: Callable, retry: RetryPolicy | None = None) -> TaskHandle","in":{"name":"dotted task name","fn":"callable","retry":"policy"},"out":"registered handle","does":"Wrap fn with logging (task id, status, duration), failure-reason persistence, retry policy. Called from each module's task contribution hook."},
+        {"id":"WRK-03","fn":"register_beat","sig":"register_beat(name: str, task_name: str, schedule: Crontab | Interval) -> None","in":{"schedule":"celery schedule"},"out":"None","does":"Add to beat schedule registry; duplicate names raise."},
+        {"id":"WRK-04","fn":"dispatch","sig":"dispatch(task_name: str, args: dict | None = None, countdown: int | None = None, idempotency_key: str | None = None) -> str","in":{"idempotency_key":"optional dedupe key"},"out":"task_id","does":"If idempotency_key given, acquire CACHE lock(key, ttl); if already running/known, return existing task id instead of re-queueing. Core anti-duplicate mechanism for cycle generation."},
+        {"id":"WRK-05","fn":"task_status","sig":"task_status(task_id: str) -> TaskStatus","in":{"task_id":"celery id"},"out":"TaskStatus{state, result, error, started_at, finished_at}","does":"Async result lookup + persisted failure reasons."},
+        {"id":"WRK-06","fn":"single_flight","sig":"single_flight(name: str, ttl_s: int) -> AsyncContextManager[bool]","in":{"name":"job name"},"out":"acquired bool","does":"Cluster-wide exactly-one-at-a-time for beat jobs via CACHE.lock. If not acquired, skip silently."},
+        {"id":"WRK-07","fn":"retry_with_backoff","sig":"retry_with_backoff(task, exc: Exception, base: float = 2.0, max_retries: int = 5) -> None","in":{"exc":"transient failure"},"out":"None (raises after max)","does":"Exponential backoff (base^n + jitter); on exhaustion route to dead-letter queue and store failure reason for inspection."},
+        {"id":"WRK-08","fn":"failed_jobs","sig":"failed_jobs(page: int = 1, page_size: int = 50) -> Page[FailedJob]","in":{},"out":"Page of {task_id, name, error, failed_at, payload_ref}","does":"Admin inspection of dead-letter entries (exposed via OBSERVABILITY admin route)."},
+        {"id":"WRK-09","fn":"collect_contributions","sig":"collect_contributions(modules: list) -> None","in":{"modules":"loaded modules"},"out":"None","does":"At start(), call each module's register_tasks()/register_beat() contribution hooks."},
+        {"id":"WRK-10","fn":"drain","sig":"drain(timeout_s: int = 30) -> None","in":{"timeout_s":"grace period"},"out":"None","does":"Graceful shutdown: let running tasks finish, revoke queued, close broker connections."}
+      ]
+    },
+
+    {
+      "priority": 9, "module": "templates", "wave": 2, "path": "modules/templates/",
+      "purpose": "Workflow/checklist templates, item-level search, unique codes, immutable snapshots for work orders.",
+      "depends_on": ["core","db","api"], "tables": ["workflows","workflow_items","checklist_templates","checklist_items"],
+      "events_emitted": ["template.created","template.updated","template.archived"],
+      "done_when": ["codes org-unique and editable", "item text searchable", "snapshot freezes template state"],
+      "functions": [
+        {"id":"TPL-01","fn":"create_workflow","sig":"create_workflow(ctx: RequestContext, data: WorkflowCreate) -> Workflow","route":"POST /workflows (MANAGER)","in":{"data":"{name, description, code?, items[]}"},"out":"Workflow","does":"Auto-generate org-unique code if absent (generate_code); validate items (TPL-16); persist header+items; emit template.created; audited."},
+        {"id":"TPL-02","fn":"get_workflow","sig":"get_workflow(ctx: RequestContext, workflow_id: UUID) -> WorkflowDetail","route":"GET /workflows/{id}","in":{"workflow_id":"id"},"out":"WorkflowDetail{header, items[]}","does":"Org-scoped fetch; 404 outside org."},
+        {"id":"TPL-03","fn":"update_workflow","sig":"update_workflow(ctx: RequestContext, workflow_id: UUID, patch: WorkflowPatch) -> Workflow","route":"PATCH /workflows/{id} (MANAGER)","in":{"patch":"fields to change"},"out":"updated Workflow","does":"Header update; code changes re-checked for uniqueness; NEVER affects existing work orders (snapshot semantics); audited."},
+        {"id":"TPL-04","fn":"list_workflows","sig":"list_workflows(ctx: RequestContext, q: str | None, page: int, page_size: int) -> Page[Workflow]","route":"GET /workflows","in":{"q":"optional name/code filter"},"out":"Page","does":"Org-scoped paginated list."},
+        {"id":"TPL-05","fn":"archive_workflow","sig":"archive_workflow(ctx: RequestContext, workflow_id: UUID) -> None","route":"DELETE /workflows/{id} (MANAGER)","in":{},"out":"204","does":"Soft delete (deleted_at, is_active=false); blocked if referenced by ACTIVE cycles unless reassign; audited."},
+        {"id":"TPL-06","fn":"add_workflow_item","sig":"add_workflow_item(ctx: RequestContext, workflow_id: UUID, item: WorkItemCreate) -> WorkflowItem","route":"POST /workflows/{id}/items (MANAGER)","in":{"item":"full work item template fields (activity number, predecessor, description, dates, status, priority, durations, assignee/skills/certs/tools/parts placeholder, safety permit, risk, location override, measurement fields, signature requirement, cost, downtime, notes)"},"out":"created item","does":"Validate predecessor refs exist within same workflow and graph stays acyclic; measurement thresholds only for NUMERIC."},
+        {"id":"TPL-07","fn":"update_workflow_item","sig":"update_workflow_item(ctx: RequestContext, workflow_id: UUID, item_id: UUID, patch: dict) -> WorkflowItem","route":"PATCH /workflows/{id}/items/{itemId}","in":{},"out":"updated item","does":"Same validations as add."},
+        {"id":"TPL-08","fn":"delete_workflow_item","sig":"delete_workflow_item(ctx: RequestContext, workflow_id: UUID, item_id: UUID) -> None","route":"DELETE /workflows/{id}/items/{itemId}","in":{},"out":"204","does":"Soft delete; clear predecessor references pointing to it (orphan check)."},
+        {"id":"TPL-09","fn":"create_checklist","sig":"create_checklist(ctx: RequestContext, data: ChecklistCreate) -> Checklist","route":"POST /checklists (MANAGER)","in":{"data":"{name, description, code?, items[]}"},"out":"Checklist","does":"Flat inspection items; results domain Inspected|Pass|Fail; same code rules."},
+        {"id":"TPL-10","fn":"update_checklist","sig":"update_checklist(ctx: RequestContext, checklist_id: UUID, patch: ChecklistPatch) -> Checklist","route":"PATCH /checklists/{id}","in":{},"out":"updated","does":"Header/item update with uniqueness recheck."},
+        {"id":"TPL-11","fn":"list_checklists","sig":"list_checklists(ctx: RequestContext, q: str | None, page: int, page_size: int) -> Page[Checklist]","route":"GET /checklists","in":{},"out":"Page","does":"Org-scoped list."},
+        {"id":"TPL-12","fn":"archive_checklist","sig":"archive_checklist(ctx: RequestContext, checklist_id: UUID) -> None","route":"DELETE /checklists/{id}","in":{},"out":"204","does":"Soft delete with active-cycle reference guard."},
+        {"id":"TPL-13","fn":"add_checklist_item / update_checklist_item / delete_checklist_item","sig":"add_checklist_item(ctx, checklist_id, item) -> ChecklistItem; update_checklist_item(ctx, checklist_id, item_id, patch) -> ChecklistItem; delete_checklist_item(ctx, checklist_id, item_id) -> None","route":"POST|PATCH|DELETE /checklists/{id}/items[/{itemId}]","in":{"item":"{description, measurement fields, signature flag, ...}"},"out":"item / 204","does":"Item CRUD for flat checklists; same validation rules."},
+        {"id":"TPL-14","fn":"search_workflows","sig":"search_workflows(ctx: RequestContext, q: str, page: int, page_size: int) -> Page[SearchHit]","route":"GET /workflows/search","in":{"q":"free text"},"out":"Page of hits with matched item snippets","does":"Text search WITHIN individual workflow items (not just headers)."},
+        {"id":"TPL-15","fn":"search_checklists","sig":"search_checklists(ctx: RequestContext, q: str, page: int, page_size: int) -> Page[SearchHit]","route":"GET /checklists/search","in":{},"out":"Page","does":"Same item-level search for checklists."},
+        {"id":"TPL-16","fn":"validate_item","sig":"validate_item(item: WorkItemCreate) -> list[str]","in":{"item":"candidate item"},"out":"violation codes","does":"Enforce: measurement min/max only when data_type=NUMERIC; risk/priority enums; predecessor acyclicity; signature flag boolean."},
+        {"id":"TPL-17","fn":"generate_code","sig":"generate_code(ctx: RequestContext, kind: str) -> str","in":{"kind":"workflow|checklist"},"out":"org-unique code","does":"Sequential/hashed code unique within organization; editable later with uniqueness re-check; no cross-org sharing."},
+        {"id":"TPL-18","fn":"snapshot","sig":"snapshot(template_id: UUID, org_id: UUID) -> TemplateSnapshot","in":{"template_id":"source"},"out":"TemplateSnapshot (frozen JSON)","does":"Deep-copy template header+items into immutable snapshot stored with the consuming work order. THE port used by WORKORDERS generation."}
+      ]
+    },
+
+    {
+      "priority": 10, "module": "observability", "wave": 2, "path": "modules/observability/",
+      "purpose": "Health endpoints, module status admin view, metrics.",
+      "depends_on": ["core","api"], "tables": [], "events_emitted": [],
+      "done_when": ["/health/live and /health/ready correct", "admin sees per-module status"],
+      "functions": [
+        {"id":"OBS-01","fn":"live","sig":"live() -> Response","route":"GET /health/live","in":{},"out":"200 {status:'alive'}","does":"Liveness: core event loop + registry intact."},
+        {"id":"OBS-02","fn":"ready","sig":"ready() -> Response","route":"GET /health/ready","in":{},"out":"200 if all hard-dep modules OK else 503 with failing list","does":"Aggregate CORE.poll_health(); readiness gate for load balancer."},
+        {"id":"OBS-03","fn":"module_status","sig":"module_status(ctx: RequestContext) -> list[ModuleStatus]","route":"GET /admin/modules (SYS_ADMIN)","in":{},"out":"[{name, version, status, last_error, latency_ms, uptime}]","does":"Admin view of supervision state."},
+        {"id":"OBS-04","fn":"record_metric","sig":"record_metric(name: str, value: float, tags: dict | None = None) -> None","in":{"name":"metric","value":"value","tags":"labels"},"out":"None","does":"In-memory counter/histogram registry; optional Prometheus exporter format."},
+        {"id":"OBS-05","fn":"http_metrics_hook","sig":"http_metrics_hook(request: Request, response: Response, elapsed_ms: float) -> None","in":{},"out":"None","does":"Middleware hook into API: request latency, status code, route label; error rate counters."},
+        {"id":"OBS-06","fn":"task_metrics_hook","sig":"task_metrics_hook(task_name: str, state: str, duration_ms: float) -> None","in":{},"out":"None","does":"Registered into WORKER: queue length, success/failure counts, AI latency, RAG latency, upload failures."}
+      ]
+    },
+
+    {
+      "priority": 11, "module": "audit", "wave": 2, "path": "modules/audit/",
+      "purpose": "Append-only audit trail, event-driven capture, query + AI Activity Log.",
+      "depends_on": ["core","db"], "tables": ["audit_logs"], "events_consumed": ["* (wildcard)"],
+      "done_when": ["all baseline section-20 events captured", "table immutable", "MCP actor attribution works"],
+      "functions": [
+        {"id":"AUD-01","fn":"record","sig":"record(entry: AuditEntry) -> UUID","in":{"entry":"{organization_id, actor_id, actor_type: USER|MCP_AGENT, role, action, entity_type, entity_id, prev_state: dict, new_state: dict, ip, user_agent}"},"out":"audit_id","does":"Append-only insert (table has NO update/delete grants). Timestamp UTC from core.utcnow()."},
+        {"id":"AUD-02","fn":"on_event","sig":"async on_event(payload: dict) -> None","in":{"payload":"any domain event with auditable=true flag"},"out":"None","does":"Wildcard subscriber mapping baseline section-20 events to AuditEntry. Critical events written transactionally with the business op; non-critical buffered to AUD-03."},
+        {"id":"AUD-03","fn":"record_batch","sig":"record_batch(entries: list[AuditEntry]) -> int","task":true,"in":{"entries":"buffered entries"},"out":"rows written","does":"Worker batch persist for low-criticality events."},
+        {"id":"AUD-04","fn":"query","sig":"query(ctx: RequestContext, filters: AuditFilter, page: int, page_size: int) -> Page[AuditRow]","route":"GET /audit (MANAGER, SYS_ADMIN)","in":{"filters":"{actor_id?, action?, entity_type?, entity_id?, from_ts?, to_ts?}"},"out":"Page","does":"Org-scoped audit search; SYS_ADMIN may add cross-org queries only with explicit audited bypass."},
+        {"id":"AUD-05","fn":"mcp_activity_log","sig":"mcp_activity_log(ctx: RequestContext, filters: AuditFilter, page: int, page_size: int) -> Page[AuditRow]","route":"GET /audit/ai-activity (MANAGER)","in":{},"out":"Page","does":"AUD-04 preset to actor_type=MCP_AGENT; powers the org-level 'AI Activity Log' screen."}
+      ]
+    },
+
+    {
+      "priority": 12, "module": "notify", "wave": 2, "path": "modules/notify/",
+      "purpose": "In-app notification center: event-driven creation, read state, 30-day expiry. Polling delivery (SSE reserved).",
+      "depends_on": ["core","db","api","cache"], "tables": ["notifications"], "events_consumed": ["work_order.*","ticket.*","cycle.eval_failed","ai.ingestion_*","ai.checklist_*","export.ready"],
+      "done_when": ["every baseline section-13 event produces a notification", "deep links correct", "expiry job runs"],
+      "functions": [
+        {"id":"NTF-01","fn":"notify","sig":"notify(org_id: UUID, user_id: UUID, type: str, title: str, body: str, link: EntityLink) -> Notification","in":{"link":"{entity_type, entity_id}"},"out":"Notification row","does":"Create with expires_at = now + 30d; invalidate unread cache for user."},
+        {"id":"NTF-02","fn":"notify_role","sig":"notify_role(org_id: UUID, role: Role, type: str, title: str, body: str, link: EntityLink) -> int","in":{},"out":"count created","does":"Fan-out to all active members holding role (e.g. MAINTENANCE pool on new ticket)."},
+        {"id":"NTF-03","fn":"list_notifications","sig":"list_notifications(ctx: RequestContext, unread_only: bool = False, page: int = 1, page_size: int = 50) -> Page[Notification]","route":"GET /notifications","in":{},"out":"Page","does":"Org+user scoped, newest first, unexpired only."},
+        {"id":"NTF-04","fn":"mark_read","sig":"mark_read(ctx: RequestContext, notification_id: UUID) -> None","route":"POST /notifications/{id}/read","in":{},"out":"204","does":"Set read_timestamp; 404 if not owner."},
+        {"id":"NTF-05","fn":"mark_all_read","sig":"mark_all_read(ctx: RequestContext) -> int","route":"POST /notifications/read-all","in":{},"out":"count","does":"Bulk mark read."},
+        {"id":"NTF-06","fn":"unread_count","sig":"unread_count(ctx: RequestContext) -> int","route":"GET /notifications/unread-count","in":{},"out":"int","does":"Cached in CACHE kv (bell badge); invalidated on NTF-01/04/05."},
+        {"id":"NTF-07","fn":"on_event","sig":"async on_event(payload: dict) -> None","in":{"payload":"domain event"},"out":"None","does":"Mapping table implementing baseline section 13: new WO assigned, WO overdue, snooze expiration, ticket assigned/claimed, report submitted, feedback received, escalated, cycle trigger failure, AI ingestion completed/failed, AI generation completed/failed, export ready. Each maps event -> recipients + title + deep link."},
+        {"id":"NTF-08","fn":"expire_notifications","sig":"expire_notifications() -> int","task":true,"beat":"daily","in":{},"out":"count expired","does":"Mark/archive notifications older than 30 days."}
+      ]
+    },
+
+    {
+      "priority": 13, "module": "tenancy", "wave": 3, "path": "modules/tenancy/",
+      "purpose": "Organizations, tiers/quotas, payment state, invitations, memberships, org-scope middleware (RLS binding).",
+      "depends_on": ["core","db","api","auth"], "tables": ["organizations","organization_custom_fields","invitations","subscription_tiers","payment_states","user_organization_memberships"],
+      "events_emitted": ["org.created","org.updated","invitation.sent","invitation.accepted","invitation.expired","membership.changed","payment.overdue","payment.cleared"],
+      "done_when": ["quota blocks 101st service point on Free", "overdue org cannot create tickets", "14-day invitation expiry", "single-org membership enforced"],
+      "functions": [
+        {"id":"TEN-01","fn":"create_organization","sig":"create_organization(ctx: RequestContext, profile: OrgProfile) -> Organization","route":"POST /organizations (verified user)","in":{"profile":"{name, logo?, contact, timezone, custom_fields(2-3)}"},"out":"Organization","does":"Create tenant; creator becomes MANAGER member; org doubles as root zone for address/contact; default tier Free; emit org.created; audited."},
+        {"id":"TEN-02","fn":"get_org","sig":"get_org(ctx: RequestContext) -> OrganizationDetail","route":"GET /organizations/me","in":{},"out":"org profile + tier + payment status","does":"Org-scoped read."},
+        {"id":"TEN-03","fn":"update_org","sig":"update_org(ctx: RequestContext, patch: OrgPatch) -> Organization","route":"PATCH /organizations/me (MANAGER)","in":{"patch":"profile fields incl. custom_fields"},"out":"updated org","does":"Validate custom fields count 2-3 JSONB schema; audited; emit org.updated."},
+        {"id":"TEN-04","fn":"get_tier","sig":"get_tier(ctx: RequestContext) -> TierInfo","route":"GET /organizations/tier","in":{},"out":"{tier, effective_from, effective_to, node_limit, used, remaining}","does":"Tier with usage; Free=100, Pro=1000, Ultimate=unlimited."},
+        {"id":"TEN-05","fn":"count_service_points","sig":"count_service_points(org_id: UUID) -> int","in":{},"out":"count of ACTIVE service points","does":"Counts only active nodes; zones/systems never counted."},
+        {"id":"TEN-06","fn":"assert_node_creatable","sig":"assert_node_creatable(org_id: UUID) -> None","in":{},"out":"None","does":"Raise QuotaExceeded(error_code=TIER_LIMIT_REACHED) when active count >= limit. THE port called by ASSETS before creating a service point."},
+        {"id":"TEN-07","fn":"get_payment_status","sig":"get_payment_status(org_id: UUID) -> PaymentStatus","in":{},"out":"{status: ok|overdue, overdue_since}","does":"Read payment state."},
+        {"id":"TEN-08","fn":"set_payment_status","sig":"set_payment_status(ctx: RequestContext, org_id: UUID, status: str) -> None","route":"PATCH /admin/organizations/{id}/payment (SYS_ADMIN)","in":{},"out":"None","does":"SYS_ADMIN only; audited; emit payment.overdue or payment.cleared."},
+        {"id":"TEN-09","fn":"can_create_ticket","sig":"can_create_ticket(org_id: UUID) -> bool","in":{},"out":"False if overdue","does":"THE port called by TICKETS creation. Overdue orgs keep all other access."},
+        {"id":"TEN-10","fn":"create_invitation","sig":"create_invitation(ctx: RequestContext, email: EmailStr, role: Role) -> Invitation","route":"POST /organizations/invitations (MANAGER)","in":{"email":"invitee","role":"target role (never SYS_ADMIN)"},"out":"Invitation{token, expires_at=+14d, status}","does":"If email matches existing verified user -> mark PENDING_ACCEPT for direct add; else secure token + invitation email via EMAIL; emit invitation.sent; rate-limited; audited."},
+        {"id":"TEN-11","fn":"list_invitations","sig":"list_invitations(ctx: RequestContext, page: int, page_size: int) -> Page[Invitation]","route":"GET /organizations/invitations (MANAGER)","in":{},"out":"Page","does":"Org-scoped list with status/expiry."},
+        {"id":"TEN-12","fn":"revoke_invitation","sig":"revoke_invitation(ctx: RequestContext, invitation_id: UUID) -> None","route":"DELETE /organizations/invitations/{id} (MANAGER)","in":{},"out":"204","does":"Revoke pending invitation; audited."},
+        {"id":"TEN-13","fn":"accept_invitation","sig":"accept_invitation(token_or_id: str, ctx: RequestContext) -> Membership","route":"POST /organizations/invitations/accept","in":{"token_or_id":"token (new user) or invitation id (existing)"},"out":"active membership","does":"Validate not expired; enforce single-org rule: if user has existing membership, require leave/replace (explicit flag) before switching; emit invitation.accepted + membership.changed; audited."},
+        {"id":"TEN-14","fn":"lookup_user","sig":"lookup_user(ctx: RequestContext, email_prefix: str) -> LookupResult","route":"GET /organizations/user-lookup?email= (MANAGER)","in":{"email_prefix":"type-ahead query"},"out":"{found: bool, masked_email}","does":"Existing-user invitation lookup; response masked to avoid enumeration."},
+        {"id":"TEN-15","fn":"expire_invitations","sig":"expire_invitations() -> int","task":true,"beat":"hourly","in":{},"out":"count expired","does":"Expire invitations older than 14 days; emit invitation.expired."},
+        {"id":"TEN-16","fn":"leave_organization","sig":"leave_organization(ctx: RequestContext) -> None","route":"POST /organizations/leave","in":{},"out":"204","does":"Member leaves org; last-manager guard (must transfer or accept replacement); emit membership.changed."},
+        {"id":"TEN-17","fn":"bind_org_scope","sig":"bind_org_scope(request: Request, claims: Claims) -> RequestContext","in":{"claims":"verified JWT claims"},"out":"RequestContext","does":"Middleware hook into API order 40: verify requested resource org matches claims.organization_id; cross-org -> 404 (no existence leak); bind DB RLS session for the request."},
+        {"id":"TEN-18","fn":"validate_custom_fields","sig":"validate_custom_fields(data: dict, max_fields: int) -> list[str]","in":{"max_fields":"3 for org, 5 for zone"},"out":"violation codes","does":"JSONB custom-field count/type validation."}
+      ]
+    },
+
+    {
+      "priority": 14, "module": "ai", "wave": 3, "path": "modules/ai/",
+      "purpose": "Provider abstraction (OpenRouter default), Phase-1 checklist generation, Phase-2 RAG manual assistant. ALL AI code lives here.",
+      "depends_on": ["core","db","api","cache","worker","storage"], "tables": ["document_ingestion_jobs","document_chunks(+pgvector)","ai_generation_jobs","ai_assistant_threads","ai_assistant_messages","ai_usage_logs"],
+      "events_consumed": ["manual.ingestion_requested"], "events_emitted": ["ai.checklist_completed","ai.checklist_failed","ai.ingestion_completed","ai.ingestion_failed","ai.assistant_answered"],
+      "done_when": ["provider swap = new adapter + 1 env var", "RAG strictly tenant+node filtered", "draft outputs never authoritative", "usage logged"],
+      "functions": [
+        {"id":"AI-01","fn":"provider_for","sig":"provider_for(org_id: UUID) -> AIProviderAdapter","in":{"org_id":"tenant"},"out":"adapter instance","does":"Select by CMMS_AI__PROVIDER (openrouter|openai|anthropic|local); if org listed in CMMS_AI__PRIVACY_MODE_ORGS force local adapter. Swapping providers NEVER touches other modules."},
+        {"id":"AI-02","fn":"OpenRouterAdapter.generate_text","sig":"async generate_text(messages: list[Message], schema: dict | None = None, opts: GenOpts = None) -> GenerationResult","in":{"messages":"chat messages","schema":"optional JSON schema for structured output","opts":"{model, temperature, max_tokens}"},"out":"GenerationResult{content, model, usage, latency_ms}","does":"OpenAI-compatible HTTP call to OpenRouter base URL; timeout+retry from config; structured-output enforcement when schema given. Sibling adapters (OpenAI/Anthropic/Local) implement identical Protocol."},
+        {"id":"AI-03","fn":"OpenRouterAdapter.generate_embedding","sig":"async generate_embedding(texts: list[str]) -> list[list[float]]","in":{"texts":"batch"},"out":"embedding vectors","does":"Embedding model call; batch size limited; dimensionality configured."},
+        {"id":"AI-04","fn":"OpenRouterAdapter.stream_text","sig":"stream_text(messages: list[Message], opts: GenOpts = None) -> AsyncIterator[str]","in":{},"out":"token stream","does":"Optional streaming for assistant answers."},
+        {"id":"AI-05","fn":"sanitize_prompt","sig":"sanitize_prompt(text: str, ctx: RequestContext) -> str","in":{"text":"raw prompt"},"out":"sanitized prompt","does":"Strip organization_id, user names/emails, tenant identifiers before any external call. Mandatory for external providers."},
+        {"id":"AI-06","fn":"generate_checklist","sig":"generate_checklist(ctx: RequestContext, prompt: str) -> GenerationJob","route":"POST /ai/checklists/generate (MANAGER)","in":{"prompt":"natural language, e.g. 'monthly inspection checklist for a 500kVA diesel generator'"},"out":"GenerationJob{id, status: PENDING}","does":"Rate-limit via CACHE (strict AI limits); create ai_generation_jobs row; dispatch WRK task; return job id (async model)."},
+        {"id":"AI-07","fn":"run_checklist_generation","sig":"run_checklist_generation(job_id: UUID) -> None","task":true,"in":{"job_id":"job"},"out":"None","does":"Build prompt with JSON schema -> sanitize -> provider.generate_text(schema) -> validate output (AI-08, retry once on invalid) -> store draft items; status COMPLETED/FAILED; emit ai.checklist_completed|failed; NTF to requesting manager. Draft ONLY - manager must review and save via TEMPLATES."},
+        {"id":"AI-08","fn":"validate_checklist_output","sig":"validate_checklist_output(raw: str) -> list[GeneratedItem]","in":{"raw":"LLM JSON"},"out":"parsed items","does":"Schema-check fields: item_description, measurement_type, unit, min/max thresholds, estimated_duration, risk_level, tools, skills. Raise on mismatch."},
+        {"id":"AI-09","fn":"get_generation","sig":"get_generation(ctx: RequestContext, job_id: UUID) -> GenerationJobDetail","route":"GET /ai/generations/{id}","in":{},"out":"{status, items?, error?, model, provider}","does":"Org-scoped job fetch."},
+        {"id":"AI-10","fn":"list_generations","sig":"list_generations(ctx: RequestContext, page: int, page_size: int) -> Page[GenerationJob]","route":"GET /ai/generations","in":{},"out":"Page","does":"Org history of AI generations (feeds logs UI)."},
+        {"id":"AI-11","fn":"ingest_manual","sig":"ingest_manual(file_id: UUID) -> None","task":true,"in":{"file_id":"manual file"},"out":"None","does":"Pipeline: FILES.set_ingestion_status(PROCESSING) -> STORAGE.get -> extract_text -> chunk_text -> generate_embedding -> upsert_chunks -> status COMPLETED; on error FAILED; emit ai.ingestion_completed|failed; NTF."},
+        {"id":"AI-12","fn":"extract_text","sig":"extract_text(key: str, mime: str) -> ExtractedText","in":{"key":"storage key","mime":"application/pdf|text/plain|docx"},"out":"ExtractedText{text, pages[], headings[]}","does":"PDF via pypdf (page-level), TXT direct, DOCX via parser; preserve page numbers and headings for citations."},
+        {"id":"AI-13","fn":"chunk_text","sig":"chunk_text(text: str, size: int = 800, overlap: int = 100) -> list[Chunk]","in":{"size":"tokens per chunk","overlap":"token overlap"},"out":"list[Chunk{text, page, heading, tokens}]","does":"Sliding-window chunking honoring paragraph/heading boundaries."},
+        {"id":"AI-14","fn":"upsert_chunks","sig":"upsert_chunks(org_id: UUID, node_id: UUID, file_id: UUID, chunks: list[Chunk], embeddings: list[list[float]]) -> int","in":{},"out":"rows written","does":"pgvector insert with metadata {organization_id, service_point_id, file_id, page, chunk_index, heading, tokens, created_at}. Replace-by-file semantics."},
+        {"id":"AI-15","fn":"retrieve","sig":"retrieve(ctx: RequestContext, query: str, node_id: UUID, top_k: int = 6, threshold: float = 0.25, file_ids: list[UUID] | None = None) -> list[ScoredChunk]","in":{"node_id":"service point scope","file_ids":"optional manual filter"},"out":"list[{text, score, file_id, page, heading}]","does":"Embed query -> cosine search in pgvector WHERE organization_id=ctx.org_id AND service_point_id=node_id (+file filter). Cross-tenant retrieval impossible by construction. Empty below threshold."},
+        {"id":"AI-16","fn":"create_thread","sig":"create_thread(ctx: RequestContext, node_id: UUID) -> Thread","route":"POST /ai/assistant/threads","in":{"node_id":"service point"},"out":"Thread{id}","does":"Permission check: caller can view node + manuals (Maintenance/Manager/permitted roles). Thread belongs to (user, node)."},
+        {"id":"AI-17","fn":"ask","sig":"ask(ctx: RequestContext, thread_id: UUID, question: str) -> Answer","route":"POST /ai/assistant/threads/{id}/messages","in":{"question":"user question"},"out":"Answer{content, citations: [{file_id, page, heading}], found: bool}","does":"Rate-limit -> retrieve(node chunks) -> if none: fixed fallback 'answer not found in attached manuals' (NO hallucination) -> else grounded answer from retrieved context only, citations included; store user+assistant messages; log usage; emit ai.assistant_answered. Optional SSE streaming."},
+        {"id":"AI-18","fn":"list_messages","sig":"list_messages(ctx: RequestContext, thread_id: UUID, page: int, page_size: int) -> Page[Message]","route":"GET /ai/assistant/threads/{id}/messages","in":{},"out":"Page","does":"Thread history (recent context; no long-term memory)."},
+        {"id":"AI-19","fn":"reprocess_manual","sig":"reprocess_manual(ctx: RequestContext, file_id: UUID) -> GenerationJob","route":"POST /ai/manuals/{fileId}/reprocess (MANAGER/MAINTENANCE)","in":{},"out":"ingestion job","does":"Delete existing chunks for file -> re-run ingest_manual."},
+        {"id":"AI-20","fn":"on_ingestion_requested","sig":"async on_ingestion_requested(payload: dict) -> None","in":{"payload":"{file_id, org_id, node_id}"},"out":"None","does":"Subscriber for manual.ingestion_requested (from FILES); dispatches ingest_manual with idempotency key."},
+        {"id":"AI-21","fn":"log_usage","sig":"log_usage(org_id: UUID, user_id: UUID, feature: str, model: str, provider: str, tokens_in: int, tokens_out: int, latency_ms: int, status: str) -> None","in":{},"out":"None","does":"Write ai_usage_logs for billing/quality review."},
+        {"id":"AI-22","fn":"retry_failed_ingestions","sig":"retry_failed_ingestions() -> int","task":true,"beat":"every 10 minutes","in":{},"out":"count retried","does":"Re-dispatch FAILED ingestion jobs up to retry cap."},
+        {"id":"AI-23","fn":"health_check","sig":"health_check() -> HealthReport","in":{},"out":"HealthReport","does":"Tiny embedding probe through active adapter + pgvector readiness + ingestion queue depth."}
+      ]
+    },
+
+    {
+      "priority": 15, "module": "reports", "wave": 3, "path": "modules/reports/",
+      "purpose": "KPIs, dashboards, user counters, export pipeline.",
+      "depends_on": ["core","db","api","worker","storage"], "tables": ["dashboard_metrics","report_exports"],
+      "events_emitted": ["export.ready"],
+      "done_when": ["all baseline section-14 KPIs computed", "exports tenant-scoped with expiring URL", "org isolation in every query"],
+      "functions": [
+        {"id":"RPT-01","fn":"work_order_report","sig":"work_order_report(ctx: RequestContext, filters: ReportFilter, page: int, page_size: int) -> Page[Row]","route":"GET /reports/work-orders (MANAGER, REPORTER)","in":{"filters":"{status, priority, date_range, asset_id, planned_unplanned}"},"out":"Page","does":"Indexed org-scoped WO analytics rows + aggregates."},
+        {"id":"RPT-02","fn":"ticket_report","sig":"ticket_report(ctx: RequestContext, filters: ReportFilter, page: int, page_size: int) -> Page[Row]","route":"GET /reports/tickets (MANAGER, REPORTER)","in":{},"out":"Page","does":"Ticket analytics incl. escalation counts."},
+        {"id":"RPT-03","fn":"asset_report","sig":"asset_report(ctx: RequestContext, filters: ReportFilter, page: int, page_size: int) -> Page[Row]","route":"GET /reports/assets (MANAGER, REPORTER)","in":{},"out":"Page","does":"Asset-level stats: downtime where inferable, safety flag incidents, completion rates."},
+        {"id":"RPT-04","fn":"kpi_dashboard","sig":"kpi_dashboard(ctx: RequestContext, filters: ReportFilter) -> Kpis","route":"GET /reports/kpis (MANAGER, REPORTER)","in":{},"out":"Kpis{overdue_work_orders, open_tickets, escalated_tickets, wo_by_status{}, planned_vs_unplanned{}, completion_rate, safety_incidents, open_wo_by_priority{}, downtime_estimate}","does":"All baseline section-14 KPIs; materialized dashboard_metrics when heavy; org-isolated. THE port used by MCP get_kpi_dashboard."},
+        {"id":"RPT-05","fn":"user_counters","sig":"user_counters(ctx: RequestContext) -> UserCounters","route":"GET /reports/my-counters","in":{},"out":"{new_work_orders, active_work_orders, shortcuts[]}","does":"Per-user dashboard counters + role-specific shortcuts."},
+        {"id":"RPT-06","fn":"request_export","sig":"request_export(ctx: RequestContext, report: str, filters: ReportFilter, format: str = 'csv') -> ExportJob","route":"POST /reports/export (MANAGER, REPORTER)","in":{"report":"work-orders|tickets|assets","format":"csv|xlsx"},"out":"ExportJob{id, status: PENDING}","does":"Create export job; dispatch worker; return job id."},
+        {"id":"RPT-07","fn":"generate_export","sig":"generate_export(job_id: UUID) -> None","task":true,"in":{"job_id":"job"},"out":"None","does":"Stream rows -> CSV (or XLSX) -> STORAGE tenant key exports/ -> create short-lived download URL -> emit export.ready (NOTF-07 notifies user). Org isolation enforced by source query."},
+        {"id":"RPT-08","fn":"refresh_metrics","sig":"refresh_metrics() -> None","task":true,"beat":"every 15 minutes","in":{},"out":"None","does":"Refresh materialized views / dashboard_metrics table."}
+      ]
+    },
+
+    {
+      "priority": 16, "module": "assets", "wave": 4, "path": "modules/assets/",
+      "purpose": "Full asset hierarchy, counters+inheritance, QR, zone cloning, safety flags and asset state service.",
+      "depends_on": ["core","db","api","tenancy","storage","worker"], "tables": ["zones","zone_custom_fields","systems","system_zone_links","sub_systems","service_points","asset_qr_codes","counters","counter_logs","safety_flags","spare_parts_placeholder","service_point_parts_placeholder"],
+      "events_emitted": ["asset.zone.created/updated/decommissioned/cloned","asset.system.*","asset.service_point.*","counter.logged","counter.reset","safety_flag.changed"],
+      "done_when": ["depth caps enforced (6 total, zone breakdown 2, system 2)", "tier quota blocks node creation", "QR resolves with role-filtered view", "clone job completes for large zones", "STOP flag propagates to parents"],
+      "functions": [
+        {"id":"AST-01","fn":"create_zone","sig":"create_zone(ctx: RequestContext, data: ZoneCreate) -> Zone","route":"POST /zones (MANAGER)","in":{"data":"{name, parent_zone_id?, status: ACTIVE|INACTIVE|UNDER_CONSTRUCTION|DECOMMISSIONED, address, contact, description, custom_fields<=5, geolocation?}"},"out":"Zone","does":"Depth check via assert_depth; persist JSONB custom fields; emit asset.zone.created; audited."},
+        {"id":"AST-02","fn":"get_zone","sig":"get_zone(ctx: RequestContext, zone_id: UUID) -> ZoneDetail","route":"GET /zones/{id}","in":{},"out":"zone + children summary + effective flags","does":"Org-scoped; 404 outside org."},
+        {"id":"AST-03","fn":"update_zone","sig":"update_zone(ctx: RequestContext, zone_id: UUID, patch: ZonePatch) -> Zone","route":"PATCH /zones/{id} (MANAGER)","in":{},"out":"updated zone","does":"Validate depth on parent change; audited; emit asset.zone.updated."},
+        {"id":"AST-04","fn":"list_zones","sig":"list_zones(ctx: RequestContext, flat: bool = False, page: int, page_size: int) -> Page[Zone]","route":"GET /zones","in":{"flat":"flat list vs tree"},"out":"Page or tree","does":"Recursive CTE traversal with depth cap."},
+        {"id":"AST-05","fn":"decommission_zone","sig":"decommission_zone(ctx: RequestContext, zone_id: UUID) -> None","route":"DELETE /zones/{id} (MANAGER)","in":{},"out":"204","does":"Soft delete; children inherit inactive/decommissioned; history preserved; audited; emit asset.zone.decommissioned. MCP wraps with confirmation gate."},
+        {"id":"AST-06","fn":"zone_tree","sig":"zone_tree(ctx: RequestContext, root_id: UUID) -> TreeNode","in":{},"out":"nested tree with depth metadata","does":"Recursive CTE; enforces zone breakdown <=2 levels under zone."},
+        {"id":"AST-07","fn":"create_system","sig":"create_system(ctx: RequestContext, data: SystemCreate) -> System","route":"POST /systems (MANAGER)","in":{"data":"{name, taxonomy, tech_specs, zone_links: [{zone_id, primary}]}"},"out":"System","does":"Systems may span zones via system_zone_links; exactly one primary link; taxonomy + general technical specs stored."},
+        {"id":"AST-08","fn":"update_system","sig":"update_system(ctx: RequestContext, system_id: UUID, patch: SystemPatch) -> System","route":"PATCH /systems/{id}","in":{},"out":"updated","does":"Header/spec update; audited."},
+        {"id":"AST-09","fn":"list_systems","sig":"list_systems(ctx: RequestContext, zone_id: UUID | None, page: int, page_size: int) -> Page[System]","route":"GET /systems","in":{},"out":"Page","does":"Optionally filtered by zone link."},
+        {"id":"AST-10","fn":"decommission_system","sig":"decommission_system(ctx: RequestContext, system_id: UUID) -> None","route":"DELETE /systems/{id}","in":{},"out":"204","does":"Soft delete cascade to sub-systems/service points state."},
+        {"id":"AST-11","fn":"link_zone / unlink_zone","sig":"link_zone(ctx, system_id: UUID, zone_id: UUID, primary: bool = False) -> SystemZoneLink; unlink_zone(ctx, system_id: UUID, zone_id: UUID) -> None","route":"POST|DELETE /systems/{id}/zone-links","in":{},"out":"link / 204","does":"Many-to-many zone association; setting primary demotes previous primary; cannot unlink last zone."},
+        {"id":"AST-12","fn":"create_sub_system","sig":"create_sub_system(ctx: RequestContext, data: SubSystemCreate) -> SubSystem","route":"POST /sub-systems (MANAGER)","in":{"data":"{name, system_id, ...}"},"out":"SubSystem","does":"System depth max 2 (system -> sub-system) enforced."},
+        {"id":"AST-13","fn":"update_sub_system / list_sub_systems / decommission_sub_system","sig":"update_sub_system(ctx, id, patch) -> SubSystem; list_sub_systems(ctx, system_id?, page...) -> Page; decommission_sub_system(ctx, id) -> None","route":"PATCH|GET|DELETE /sub-systems[/{id}]","in":{},"out":"updated / Page / 204","does":"Standard CRUD with soft delete + audit."},
+        {"id":"AST-14","fn":"create_service_point","sig":"create_service_point(ctx: RequestContext, data: ServicePointCreate) -> ServicePoint","route":"POST /service-points (MANAGER)","in":{"data":"{name, code, parent_system_id|parent_sub_system_id, lifecycle_status=ACTIVE, counters[], attachments refs}"},"out":"ServicePoint","does":"FIRST call TEN.assert_node_creatable (quota); then persist; generate stable QR code; audited; emit asset.service_point.created."},
+        {"id":"AST-15","fn":"update_service_point","sig":"update_service_point(ctx: RequestContext, node_id: UUID, patch: NodePatch) -> ServicePoint","route":"PATCH /service-points/{id}","in":{},"out":"updated node","does":"Profile update; lifecycle transitions; audited."},
+        {"id":"AST-16","fn":"list_service_points","sig":"list_service_points(ctx: RequestContext, filters: NodeFilter, page: int, page_size: int) -> Page[ServicePoint]","route":"GET /service-points","in":{"filters":"{zone, system, status, q}"},"out":"Page","does":"Org-scoped filtered list."},
+        {"id":"AST-17","fn":"decommission_service_point","sig":"decommission_service_point(ctx: RequestContext, node_id: UUID) -> None","route":"DELETE /service-points/{id} (MANAGER)","in":{},"out":"204","does":"Set DECOMMISSIONED; only ACTIVE nodes may generate new WOs/tickets; history retained; audited; MCP confirmation gate."},
+        {"id":"AST-18","fn":"get_node_history","sig":"get_node_history(ctx: RequestContext, node_id: UUID, page: int, page_size: int) -> Page[HistoryEntry]","route":"GET /service-points/{id}/history","in":{},"out":"Page of merged WO/ticket/counter entries","does":"Aggregated maintenance history for QR scan view."},
+        {"id":"AST-19","fn":"get_node_manuals","sig":"get_node_manuals(ctx: RequestContext, node_id: UUID) -> list[FileMeta]","route":"GET /service-points/{id}/manuals","in":{},"out":"manual file metadata list","does":"Delegates to FILES.list_for_entity(purpose=MANUAL)."},
+        {"id":"AST-20","fn":"create_counter","sig":"create_counter(ctx: RequestContext, node_id: UUID, data: CounterCreate) -> Counter","route":"POST /service-points/{id}/counters (MANAGER)","in":{"data":"{type: HOURS|COUNT, unit, inherit_from_parent, influence_child_nodes}"},"out":"Counter","does":"Multiple counters per node allowed."},
+        {"id":"AST-21","fn":"log_counter","sig":"log_counter(ctx: RequestContext, counter_id: UUID, new_value: float, reason: str) -> CounterLog","route":"POST /service-points/{id}/counters/log (OPERATOR, MANAGER)","in":{"new_value":"absolute value","reason":"text"},"out":"CounterLog","does":"Write counter_logs{prev, new, logged_by, reason, source=MANUAL}; if influence_child_nodes propagate top-down to child counters with source=INHERITED (children cannot override); emit counter.logged; audited."},
+        {"id":"AST-22","fn":"reset_counter","sig":"reset_counter(ctx: RequestContext, counter_id: UUID, scope: str) -> CounterLog","route":"POST /service-points/{id}/counters/reset (MAINTENANCE where permitted)","in":{"scope":"NODE | NODE_AND_CHILDREN"},"out":"CounterLog","does":"Reset to 0 with source=RESET; never affects unrelated parents; audited; emit counter.reset."},
+        {"id":"AST-23","fn":"counter_logs","sig":"counter_logs(ctx: RequestContext, counter_id: UUID, page: int, page_size: int) -> Page[CounterLog]","route":"GET /service-points/{id}/counters/logs","in":{},"out":"Page","does":"Full change history."},
+        {"id":"AST-24","fn":"effective_counter","sig":"effective_counter(node_id: UUID, counter_type: str) -> Counter","in":{},"out":"resolved counter","does":"Resolve inheritance chain top-down; used by CYCLES counter triggers."},
+        {"id":"AST-25","fn":"generate_qr","sig":"generate_qr(ctx: RequestContext, node_id: UUID) -> QrAsset","route":"POST /service-points/{id}/qr (MANAGER)","in":{},"out":"QrAsset{code, image_key}","does":"Stable code per node; server-side PNG generation; stored via STORAGE under qr/; asset_qr_codes row."},
+        {"id":"AST-26","fn":"resolve_qr","sig":"resolve_qr(ctx: RequestContext, code: str) -> QrView","route":"GET /qr/resolve/{code}","in":{"code":"scanned code"},"out":"QrView{profile, history, manuals, attachments, active_work_orders, active_tickets}","does":"Resolve node; each section filtered by caller role; unknown code -> 404."},
+        {"id":"AST-27","fn":"print_label","sig":"print_label(ctx: RequestContext, node_id: UUID) -> LabelDoc","route":"GET /service-points/{id}/qr/label","in":{},"out":"HTML/PDF printable label","does":"Label with QR + node identity."},
+        {"id":"AST-28","fn":"clone_zone","sig":"clone_zone(ctx: RequestContext, zone_id: UUID) -> CloneJob","route":"POST /zones/{id}/clone (MANAGER)","in":{},"out":"CloneJob{id, status: PENDING}","does":"Create clone job; dispatch worker. MCP wraps with confirmation gate (large side-effect)."},
+        {"id":"AST-29","fn":"run_clone","sig":"run_clone(job_id: UUID) -> None","task":true,"in":{"job_id":"job"},"out":"None","does":"Replicate zone tree, profiles, custom fields, system links, service points, cycles, template assignments, config; NEW IDs and unique codes; states PENDING->PROCESSING->COMPLETED|FAILED; emit asset.zone.cloned; notify."},
+        {"id":"AST-30","fn":"set_safety_flag","sig":"set_safety_flag(ctx: RequestContext, node_id: UUID, flag: str, on: bool) -> SafetyFlag","route":"POST /service-points/{id}/flags (MANAGER, MAINTENANCE)","in":{"flag":"HOT_INSPECT | PAUSE_FOR_INSPECTION | STOP_UNTIL_COMPLETE","on":"set/clear"},"out":"flag record","does":"Persist + audit + emit safety_flag.changed. Guard: an MCP actor may never clear/downgrade a human-set STOP_UNTIL_COMPLETE (enforced in MCP layer; service records actor_type)."},
+        {"id":"AST-31","fn":"effective_flags","sig":"effective_flags(node_id: UUID) -> FlagState","in":{},"out":"{own_flags, propagated_to_parents[], halted_parents[]}","does":"Asset state service: compute propagation - flags affect parent structure; only maintenance-halt flags stop parents; parents show halted/pending state. Port used by WORKORDERS display and dashboards."},
+        {"id":"AST-32","fn":"assert_depth","sig":"assert_depth(entity_type: str, parent_id: UUID | None) -> None","in":{},"out":"None","does":"Raise MAX_DEPTH_EXCEEDED: total hierarchy <=6; zone breakdown <=2 under zone; system depth <=2. Enforced at application AND database level."},
+        {"id":"AST-33","fn":"for_node_view","sig":"for_node_view(ctx: RequestContext, node_id: UUID) -> NodeAggregate","in":{},"out":"aggregated node view","does":"Port used by MCP resources cmms://assets/service-points/{id}/*."}
+      ]
+    },
+
+    {
+      "priority": 17, "module": "files", "wave": 4, "path": "modules/files/",
+      "purpose": "Attachment/manual domain: policy validation, metadata, entity linking, ingestion flagging. Bytes live in STORAGE.",
+      "depends_on": ["core","db","api","storage","tenancy"], "tables": ["files","work_order_attachments(join semantics shared with workorders)"],
+      "events_emitted": ["file.uploaded","file.deleted","manual.ingestion_requested"],
+      "done_when": ["10MB + MIME + extension + executable rules enforced", "tenant-scoped paths only", "ingestion handoff to AI via event"],
+      "functions": [
+        {"id":"FIL-01","fn":"validate_upload","sig":"validate_upload(filename: str, mime_claimed: str, size: int, head: bytes) -> list[str]","in":{"head":"first bytes for sniffing"},"out":"violation codes: MIME_INVALID | EXT_BLOCKED | SIZE_EXCEEDED | EXECUTABLE_BLOCKED","does":"Allowed JPEG/PNG/PDF/TXT/DOCX (+config); max 10MB default configurable; BOTH extension and MIME checked; sniffed MIME must match claimed; executables blocked."},
+        {"id":"FIL-02","fn":"upload","sig":"upload(ctx: RequestContext, stream: AsyncIterator[bytes], meta: UploadMeta) -> File","route":"POST /files/upload (multipart)","in":{"meta":"{filename, mime, entity_type, entity_id, purpose: ATTACHMENT|MANUAL|PHOTO|EXPORT|AI_INGESTION_ARTIFACT}"},"out":"File{id, key, size, mime}","does":"validate_upload -> STORAGE.tenant_key -> STORAGE.put -> persist metadata row {original name, key, mime, size, uploaded_by}; emit file.uploaded; audited. Rate-limited."},
+        {"id":"FIL-03","fn":"get_file","sig":"get_file(ctx: RequestContext, file_id: UUID) -> FileMeta","route":"GET /files/{id}","in":{},"out":"metadata","does":"Org+permission check on linked entity."},
+        {"id":"FIL-04","fn":"download_url","sig":"download_url(ctx: RequestContext, file_id: UUID) -> str","route":"GET /files/{id}/download-url","in":{},"out":"short-lived presigned URL","does":"Verify caller org + entity permission -> STORAGE.presigned_url (15 min)."},
+        {"id":"FIL-05","fn":"delete_file","sig":"delete_file(ctx: RequestContext, file_id: UUID) -> None","route":"DELETE /files/{id}","in":{},"out":"204","does":"Soft-delete metadata; STORAGE.delete; blocked where retention/audit requires; emit file.deleted; audited."},
+        {"id":"FIL-06","fn":"list_for_entity","sig":"list_for_entity(ctx: RequestContext, entity_type: str, entity_id: UUID, purpose: str | None = None) -> list[FileMeta]","in":{},"out":"file list","does":"All files linked to an entity (node manuals, WO attachments, ticket attachments)."},
+        {"id":"FIL-07","fn":"attach","sig":"attach(ctx: RequestContext, entity_type: str, entity_id: UUID, file_id: UUID) -> None","in":{},"out":"None","does":"Link existing file to entity; THE port used by WORKORDERS/TICKETS/ASSETS."},
+        {"id":"FIL-08","fn":"mark_for_ingestion","sig":"mark_for_ingestion(ctx: RequestContext, file_id: UUID) -> None","route":"POST /files/{id}/ingest (MANAGER, MAINTENANCE)","in":{},"out":"None","does":"Only PDF/TXT(/DOCX); set ingestion_status=PENDING; emit manual.ingestion_requested{file_id, org_id, node_id}. AI module consumes."},
+        {"id":"FIL-09","fn":"set_ingestion_status","sig":"set_ingestion_status(file_id: UUID, status: str) -> None","in":{"status":"PENDING|PROCESSING|COMPLETED|FAILED"},"out":"None","does":"Port for AI callbacks; drives UI status badge."},
+        {"id":"FIL-10","fn":"duplicate_policy","sig":"duplicate_policy(ctx: RequestContext, content_hash: str, entity_type: str, entity_id: UUID) -> DupDecision","in":{},"out":"reject | version | allow","does":"Org-configured duplicate handling (baseline 15 policy hook)."}
+      ]
+    },
+
+    {
+      "priority": 18, "module": "workorders", "wave": 5, "path": "modules/workorders/",
+      "purpose": "Work order lifecycle: generation from cycle events, acknowledge/reject/snooze, item execution, measurements, signatures, comments.",
+      "depends_on": ["core","db","api","templates","assets","cache","files","worker"], "tables": ["work_orders","work_order_items","work_order_item_measurements","work_order_comments","work_order_attachments","work_order_signatures","snooze_records","rejection_records"],
+      "events_consumed": ["cycle.due","cycle.missed"], "events_emitted": ["work_order.generated/acknowledged/rejected/snoozed/resumed/blocked/completed/closed/overdue","wo_item.updated/measured/signed"],
+      "done_when": ["generation idempotent per (cycle, period)", "snapshot immutable", "snooze durations exact and reactivation works", "state machine enforced"],
+      "functions": [
+        {"id":"WO-01","fn":"generate_from_cycle","sig":"generate_from_cycle(cycle_id: UUID, trigger_ctx: TriggerCtx) -> WorkOrder","in":{"trigger_ctx":"{trigger_id, period_key, overdue: bool, source: AUTO|MANUAL|MISSED}"},"out":"WorkOrder(status=GENERATED)","does":"Subscriber for cycle.due/cycle.missed. Idempotent via unique(cycle_id, period_key). Snapshot template via TPL.snapshot; target asset from cycle; deadline + grace from cycle; status GENERATED; if missed -> overdue flag visible; emit work_order.generated; NTF assignee."},
+        {"id":"WO-02","fn":"list_work_orders","sig":"list_work_orders(ctx: RequestContext, filters: WoFilter, page: int, page_size: int) -> Page[WorkOrderSummary]","route":"GET /work-orders","in":{"filters":"{status, priority, node_id, assignee, overdue, date_range}"},"out":"Page","does":"Org-scoped; role-filtered (MAINTENANCE sees assigned/pool; MANAGER all)."},
+        {"id":"WO-03","fn":"get_work_order","sig":"get_work_order(ctx: RequestContext, wo_id: UUID) -> WorkOrderDetail","route":"GET /work-orders/{id}","in":{},"out":"WO + snapshot items + measurements + comments + attachments + safety flags (AST.effective_flags) + linked ticket","does":"Full detail; triggers acknowledge side-effect on first view (WO-04)."},
+        {"id":"WO-04","fn":"acknowledge","sig":"acknowledge(ctx: RequestContext, wo_id: UUID) -> WorkOrder","route":"POST /work-orders/{id}/acknowledge","in":{},"out":"updated WO","does":"Idempotent; store viewed_by + first_view_at; GENERATED->ACKNOWLEDGED; emit work_order.acknowledged."},
+        {"id":"WO-05","fn":"reject","sig":"reject(ctx: RequestContext, wo_id: UUID, reason: str) -> WorkOrder","route":"POST /work-orders/{id}/reject","in":{"reason":"REQUIRED non-empty"},"out":"updated WO","does":"Status REJECTED; rejection_records row; remains in history; emit work_order.rejected; notify manager."},
+        {"id":"WO-06","fn":"snooze","sig":"snooze(ctx: RequestContext, wo_id: UUID, duration: str, reason: str) -> WorkOrder","route":"POST /work-orders/{id}/snooze","in":{"duration":"1h | 6h | 12h | 1d | 3d | 6d (exact set)","reason":"REQUIRED"},"out":"updated WO","does":"Status SNOOZED; snooze_records row; CACHE.delay_schedule(resume task at now+duration); emit work_order.snoozed."},
+        {"id":"WO-07","fn":"resume","sig":"resume(ctx: RequestContext, wo_id: UUID) -> WorkOrder","in":{},"out":"updated WO","does":"SNOOZED->previous active state; emit work_order.resumed."},
+        {"id":"WO-08","fn":"resume_snoozed","sig":"resume_snoozed() -> int","task":true,"beat":"every minute","in":{},"out":"count resumed","does":"Pop CACHE.delay_due -> resume each + NTF snooze-expiration notification."},
+        {"id":"WO-09","fn":"update_item","sig":"update_item(ctx: RequestContext, wo_id: UUID, item_id: UUID, patch: ItemPatch) -> WorkOrderItem","route":"PATCH /work-orders/{id}/items/{itemId} (MAINTENANCE, MANAGER)","in":{"patch":"{status: TASK|STARTED|COMPLETED|FAILED|PENDING_PREDECESSOR|PERFORMED_BY, started_at, closed_at, performed_by, notes}"},"out":"updated item","does":"Validate transitions incl. predecessor resolution (PENDING_PREDECESSOR releases when predecessor completes); recompute completion %; emit wo_item.updated."},
+        {"id":"WO-10","fn":"record_measurement","sig":"record_measurement(ctx: RequestContext, wo_id: UUID, item_id: UUID, value: float | str | bool) -> Measurement","route":"POST /work-orders/{id}/items/{itemId}/measurement","in":{"value":"must match template data_type"},"out":"Measurement row","does":"Type-check NUMERIC/TEXT/BOOLEAN against snapshot definition; store raw value (auto pass/fail from thresholds is post-MVP); emit wo_item.measured."},
+        {"id":"WO-11","fn":"add_comment","sig":"add_comment(ctx: RequestContext, wo_id: UUID, text: str, parent_comment_id: UUID | None = None) -> Comment","route":"POST /work-orders/{id}/comments","in":{"parent_comment_id":"for threading"},"out":"Comment","does":"Threaded comments on work order."},
+        {"id":"WO-12","fn":"attach_file","sig":"attach_file(ctx: RequestContext, wo_id: UUID, file_id: UUID, item_id: UUID | None = None) -> None","route":"POST /work-orders/{id}/attachments","in":{"item_id":"optional per-item attachment"},"out":"None","does":"Delegate FIL.attach for WO-level or item-level attachments."},
+        {"id":"WO-13","fn":"sign","sig":"sign(ctx: RequestContext, wo_id: UUID, item_id: UUID, signature: SignatureData) -> Signature","route":"POST /work-orders/{id}/items/{itemId}/signature","in":{"signature":"captured signature payload"},"out":"Signature row","does":"Only when snapshot item requires digital signature; store signer + timestamp; emit wo_item.signed."},
+        {"id":"WO-14","fn":"complete","sig":"complete(ctx: RequestContext, wo_id: UUID, cost: float | None, downtime: float | None) -> WorkOrder","route":"POST /work-orders/{id}/complete (MAINTENANCE)","in":{},"out":"updated WO","does":"All items terminal; completion 100%; capture cost/downtime/finish time; status COMPLETED; emit work_order.completed; releases STOP_UNTIL_COMPLETE effects via AST state recompute."},
+        {"id":"WO-15","fn":"close","sig":"close(ctx: RequestContext, wo_id: UUID, quality_check_by: UUID | None) -> WorkOrder","route":"POST /work-orders/{id}/close (MANAGER)","in":{"quality_check_by":"QC reviewer"},"out":"updated WO","does":"COMPLETED->CLOSED with QC reviewer; emit work_order.closed."},
+        {"id":"WO-16","fn":"flag_overdue","sig":"flag_overdue() -> int","task":true,"beat":"every 5 minutes","in":{},"out":"count flagged","does":"Past-deadline active WOs -> OVERDUE + visible flag; apply deadline_behavior (FLAG_CRITICAL_STOP triggers safety flag via AST; WAIT_UNTIL_COMPLETED marks wait); emit work_order.overdue; NTF."},
+        {"id":"WO-17","fn":"assert_transition","sig":"assert_transition(current: str, target: str) -> None","in":{},"out":"None","does":"State machine table GENERATED->ACKNOWLEDGED->IN_PROGRESS->(BLOCKED|SNOOZED|REJECTED)->OVERDUE->COMPLETED->CLOSED; raise InvalidTransition."},
+        {"id":"WO-18","fn":"recompute_completion","sig":"recompute_completion(wo_id: UUID) -> int","in":{},"out":"percentage 0-100","does":"Derived from item states; persisted on WO."},
+        {"id":"WO-19","fn":"for_node","sig":"for_node(ctx: RequestContext, node_id: UUID) -> WoNodeView","in":{},"out":"active + historical WOs for node","does":"Port used by QR resolve and MCP resources."}
+      ]
+    },
+
+    {
+      "priority": 19, "module": "cycles", "wave": 5, "path": "modules/cycles/",
+      "purpose": "Maintenance cycle engine: CRUD, triggers (calendar/hours/count), winner logic, suspension, missed-cycle detection, idempotent evaluation emitting cycle.due.",
+      "depends_on": ["core","db","api","assets","templates","worker","cache"], "tables": ["cycles","cycle_triggers","cycle_evaluations"],
+      "events_emitted": ["cycle.created","cycle.updated","cycle.suspended","cycle.activated","cycle.due","cycle.missed","cycle.eval_failed"],
+      "done_when": ["first-satisfied-trigger wins", "no duplicate work orders under concurrency", "suspended cycles generate nothing", "missed cycles produce overdue WOs"],
+      "functions": [
+        {"id":"CYC-01","fn":"create_cycle","sig":"create_cycle(ctx: RequestContext, data: CycleCreate) -> Cycle","route":"POST /cycles (MANAGER)","in":{"data":"{code?, name, description, target_entity_type: ZONE|SYSTEM|SUB_SYSTEM|SERVICE_POINT, target_entity_id, assigned_template_id, safety_flag?, deadline, grace_period, deadline_behavior: FLAG_CRITICAL_STOP|WAIT_UNTIL_COMPLETED, launch_mode: AUTOMATIC|MANUAL, auto_frequency?, postpone_overhead?, influence_child_nodes, triggers[]}"},"out":"Cycle(status=ACTIVE)","does":"Validate target exists (AST) + template exists (TPL); validate cron expressions; persist + triggers; emit cycle.created; audited."},
+        {"id":"CYC-02","fn":"update_cycle","sig":"update_cycle(ctx: RequestContext, cycle_id: UUID, patch: CyclePatch) -> Cycle","route":"PATCH /cycles/{id} (MANAGER)","in":{},"out":"updated cycle","does":"Changes apply ONLY to newly generated work orders; existing WOs keep snapshots; audited; emit cycle.updated."},
+        {"id":"CYC-03","fn":"list_cycles","sig":"list_cycles(ctx: RequestContext, filters: CycleFilter, page: int, page_size: int) -> Page[Cycle]","route":"GET /cycles","in":{"filters":"{entity_type, entity_id, status}"},"out":"Page","does":"Org-scoped list."},
+        {"id":"CYC-04","fn":"get_cycle","sig":"get_cycle(ctx: RequestContext, cycle_id: UUID) -> CycleDetail","route":"GET /cycles/{id}","in":{},"out":"cycle + triggers + last evaluations","does":"Org-scoped detail."},
+        {"id":"CYC-05","fn":"add_trigger / update_trigger / remove_trigger","sig":"add_trigger(ctx, cycle_id, trigger: TriggerSpec) -> CycleTrigger; update_trigger(ctx, cycle_id, trigger_id, patch) -> CycleTrigger; remove_trigger(ctx, cycle_id, trigger_id) -> None","route":"POST|PATCH|DELETE /cycles/{id}/triggers[/{triggerId}]","in":{"trigger":"{type: CALENDAR|HOURS|COUNT, cron? | threshold?}"},"out":"trigger / 204","does":"Multiple triggers per cycle; CALENDAR uses cron expr (UTC), HOURS/COUNT use thresholds against effective counters."},
+        {"id":"CYC-06","fn":"suspend_cycle","sig":"suspend_cycle(ctx: RequestContext, cycle_id: UUID) -> Cycle","route":"POST /cycles/{id}/suspend (MANAGER)","in":{},"out":"updated cycle","does":"Status SUSPENDED; no work order generation; calendar triggers pause; emit cycle.suspended; audited."},
+        {"id":"CYC-07","fn":"activate_cycle","sig":"activate_cycle(ctx: RequestContext, cycle_id: UUID) -> Cycle","route":"POST /cycles/{id}/activate (MANAGER)","in":{},"out":"updated cycle","does":"SUSPENDED->ACTIVE; next evaluation resumes; emit cycle.activated; audited."},
+        {"id":"CYC-08","fn":"archive_cycle","sig":"archive_cycle(ctx: RequestContext, cycle_id: UUID) -> Cycle","route":"DELETE /cycles/{id} (MANAGER)","in":{},"out":"updated cycle","does":"Status ARCHIVED (soft); stops evaluation; history retained."},
+        {"id":"CYC-09","fn":"manual_trigger","sig":"manual_trigger(ctx: RequestContext, cycle_id: UUID) -> EvaluationResult","route":"POST /cycles/{id}/manual-trigger (MANAGER)","in":{},"out":"evaluation result","does":"Immediate evaluation for MANUAL launch mode; emit cycle.due with source=MANUAL; rate-limited; audited."},
+        {"id":"CYC-10","fn":"evaluate_due_cycles","sig":"evaluate_due_cycles() -> EvalSummary","task":true,"beat":"every minute","in":{},"out":"{evaluated, triggered, skipped}","does":"THE scheduler core, inside WRK.single_flight: 1) find ACTIVE cycles 2) skip SUSPENDED 3) evaluate calendar triggers (UTC) 4) evaluate counter triggers 5) FIRST satisfied trigger wins 6) emit cycle.due{cycle_id, trigger_id, period_key} (WORKORDERS generates) 7) write cycle_evaluations row. Idempotency: CACHE.lock per cycle + unique(cycle_id, period_key). Failures recorded + emit cycle.eval_failed."},
+        {"id":"CYC-11","fn":"evaluate_calendar","sig":"evaluate_calendar(trigger: CycleTrigger, now_utc: datetime, last_run: datetime | None) -> bool","in":{},"out":"bool","does":"Cron matching with auto_frequency (once/twice per day/shift); missed windows handled by CYC-13."},
+        {"id":"CYC-12","fn":"evaluate_counter","sig":"evaluate_counter(trigger: CycleTrigger, entity_id: UUID) -> bool","in":{},"out":"bool","does":"Resolve AST.effective_counter (inheritance); compare against threshold since last trigger; influence_child_nodes prevents child override."},
+        {"id":"CYC-13","fn":"detect_missed_cycles","sig":"detect_missed_cycles() -> int","task":true,"beat":"every 5 minutes","in":{},"out":"count missed","does":"Calendar cycles past due without trigger -> emit cycle.missed (WORKORDERS creates overdue-flagged WO); emit telemetry."},
+        {"id":"CYC-14","fn":"get_evaluations","sig":"get_evaluations(ctx: RequestContext, cycle_id: UUID, page: int, page_size: int) -> Page[Evaluation]","route":"GET /cycles/{id}/evaluations","in":{},"out":"Page","does":"Evaluation log: trigger, result, generated WO id, errors."}
+      ]
+    },
+
+    {
+      "priority": 20, "module": "tickets", "wave": 5, "path": "modules/tickets/",
+      "purpose": "Repair ticketing: creation with payment gate, pool claim/assign, 5-step flow, 3-loop cap, escalation.",
+      "depends_on": ["core","db","api","assets","tenancy"], "tables": ["tickets","ticket_reports","ticket_feedbacks","ticket_assignments","ticket_events"],
+      "events_emitted": ["ticket.created","ticket.claimed","ticket.assigned","ticket.report_submitted","ticket.feedback_requested","ticket.accepted","ticket.escalated","ticket.closed"],
+      "done_when": ["overdue org blocked with standard error", "loop cap auto-escalates", "every step audited + notified"],
+      "functions": [
+        {"id":"TCK-01","fn":"create_ticket","sig":"create_ticket(ctx: RequestContext, data: TicketCreate) -> Ticket","route":"POST /tickets (OPERATOR, MANAGER)","in":{"data":"{service_point_id, report_section?, description, priority: LOW|MEDIUM|HIGH|CRITICAL, attachments[]}"},"out":"Ticket(status=OPEN)","does":"Gate 1: TEN.can_create_ticket -> overdue orgs get error_code=ORG_PAYMENT_OVERDUE (existing tickets unaffected). Gate 2: node ACTIVE (unless domain rule allows). Route to Maintenance Pool; attach files via FIL; ticket_events row; emit ticket.created; NTF notify_role(MAINTENANCE); audited."},
+        {"id":"TCK-02","fn":"list_tickets","sig":"list_tickets(ctx: RequestContext, filters: TicketFilter, page: int, page_size: int) -> Page[Ticket]","route":"GET /tickets","in":{"filters":"{status, priority, assignee, pool, service_point}"},"out":"Page","does":"Org+role scoped."},
+        {"id":"TCK-03","fn":"get_ticket","sig":"get_ticket(ctx: RequestContext, ticket_id: UUID) -> TicketDetail","route":"GET /tickets/{id}","in":{},"out":"ticket + reports + feedbacks + assignments + full event history","does":"Org-scoped detail."},
+        {"id":"TCK-04","fn":"claim","sig":"claim(ctx: RequestContext, ticket_id: UUID) -> Ticket","route":"POST /tickets/{id}/claim (MAINTENANCE)","in":{},"out":"updated ticket","does":"OPEN->IN_PROGRESS; assignment=claimant; ticket_assignments row; emit ticket.claimed; NTF issuer; audited."},
+        {"id":"TCK-05","fn":"assign","sig":"assign(ctx: RequestContext, ticket_id: UUID, user_id: UUID) -> Ticket","route":"POST /tickets/{id}/assign (MANAGER)","in":{"user_id":"maintenance user"},"out":"updated ticket","does":"Manual assignment; reassignment audited; emit ticket.assigned; NTF assignee."},
+        {"id":"TCK-06","fn":"submit_report","sig":"submit_report(ctx: RequestContext, ticket_id: UUID, report: ReportData) -> Ticket","route":"POST /tickets/{id}/report (MAINTENANCE)","in":{"report":"work performed, findings, attachments"},"out":"updated ticket","does":"IN_PROGRESS->REPORT_SUBMITTED; ticket_reports row; emit ticket.report_submitted; NTF issuer."},
+        {"id":"TCK-07","fn":"submit_feedback","sig":"submit_feedback(ctx: RequestContext, ticket_id: UUID, feedback: str) -> Ticket","route":"POST /tickets/{id}/feedback (issuer: OPERATOR|MANAGER)","in":{"feedback":"correction request"},"out":"updated ticket","does":"REPORT_SUBMITTED->ISSUER_FEEDBACK_REQUIRED->back to IN_PROGRESS for maintenance; loop_counter++; if loop_counter exceeds 3 -> auto TCK-09 escalate; emit ticket.feedback_requested."},
+        {"id":"TCK-08","fn":"accept_ticket","sig":"accept_ticket(ctx: RequestContext, ticket_id: UUID) -> Ticket","route":"POST /tickets/{id}/accept (issuer)","in":{},"out":"updated ticket","does":"->ISSUER_ACCEPTED then CLOSED; emit ticket.accepted + ticket.closed; NTF maintenance."},
+        {"id":"TCK-09","fn":"escalate","sig":"escalate(ctx: RequestContext, ticket_id: UUID) -> Ticket","route":"POST /tickets/{id}/escalate (issuer, MANAGER, or auto)","in":{},"out":"updated ticket","does":"->ESCALATED_TO_MANAGER; emit ticket.escalated; NTF managers."},
+        {"id":"TCK-10","fn":"manager_decision","sig":"manager_decision(ctx: RequestContext, ticket_id: UUID, decision: str, note: str) -> Ticket","route":"POST /tickets/{id}/decision (MANAGER)","in":{"decision":"FORCE_CLOSE | REQUIRE_NEW_TICKET | MANDATE_ACTION"},"out":"updated ticket","does":"Resolve escalation per baseline 12: force close, require new ticket, or mandate additional action (returns ticket to maintenance with note)."},
+        {"id":"TCK-11","fn":"assert_transition","sig":"assert_transition(current: str, target: str) -> None","in":{},"out":"None","does":"5-step state machine OPEN->IN_PROGRESS->REPORT_SUBMITTED->ISSUER_FEEDBACK_REQUIRED->ISSUER_ACCEPTED->CLOSED with ESCALATED_TO_MANAGER branch; raise InvalidTransition."},
+        {"id":"TCK-12","fn":"loop_guard","sig":"loop_guard(ticket: Ticket) -> bool","in":{},"out":"True if escalation required","does":"Persisted loop counter for steps 3<->4; max 3 repetitions."},
+        {"id":"TCK-13","fn":"for_node","sig":"for_node(ctx: RequestContext, node_id: UUID) -> TicketNodeView","in":{},"out":"active + historical tickets for node","does":"Port used by QR resolve and MCP resources."}
+      ]
+    },
+
+    {
+      "priority": 21, "module": "mcp", "wave": 6, "path": "modules/mcp/",
+      "purpose": "MCP server exposing the full CMMS surface to external AI agents: resources (read), tools (write), prompts, with mandatory guardrails. Wraps the SAME domain ports REST uses.",
+      "depends_on": ["core","auth","tenancy","assets","cycles","templates","workorders","tickets","reports","ai","cache"], "tables": [],
+      "events_emitted": ["mcp.tool_invoked (via AUDIT)"],
+      "done_when": ["JWT/API-key session bound to one org+role", "SYS_ADMIN never exposed", "confirmation gates, dry-run, rate limits, ceilings, rollback all enforced", "behavioral parity with REST"],
+      "functions": [
+        {"id":"MCP-01","fn":"create_server","sig":"create_server() -> McpServer","in":{},"out":"MCP SDK server instance","does":"Initialize official MCP Python SDK server; advertise supported spec versions; reject unsupported clients; register health on HTTP transport."},
+        {"id":"MCP-02","fn":"serve_stdio","sig":"serve_stdio() -> None","in":{},"out":"None","does":"Stdio transport for local/sidecar agents."},
+        {"id":"MCP-03","fn":"serve_http","sig":"serve_http(port: int = None) -> None","in":{"port":"default CMMS_MCP__HTTP_PORT=8100"},"out":"None","does":"Streamable HTTP/SSE transport behind nginx /mcp/*; restricted network; MCP_ALLOWED_ORIGINS enforced."},
+        {"id":"MCP-04","fn":"authenticate","sig":"authenticate(credential: str) -> Session","in":{"credential":"JWT or scoped API key"},"out":"Session{org_id, role, actor_id, key_id}","does":"JWT path uses AUTH.verify_access_token; API-key path looks up scoped key bound to one organization_id + one role. SYS_ADMIN REJECTED unconditionally. Unauthenticated calls blocked before any tool/resource."},
+        {"id":"MCP-05","fn":"authorize","sig":"authorize(session: Session, required_roles: list[Role]) -> None","in":{},"out":"None","does":"Per-call role gate mirroring REST RBAC; protocol error on denial."},
+        {"id":"MCP-06","fn":"register_resources","sig":"register_resources(server: McpServer) -> None","in":{},"out":"None","does":"Register read resources: cmms://assets/zones, cmms://assets/systems, cmms://assets/service-points/{id}, .../history, .../manuals, cmms://cycles/{id}, cmms://workflows/{id}, cmms://checklists/{id}, cmms://work-orders, cmms://work-orders/{id}, cmms://tickets, cmms://tickets/{id}, cmms://reports/kpis, cmms://notifications. Each maps to the owning module's port with org scope + role check."},
+        {"id":"MCP-07","fn":"register_tools","sig":"register_tools(server: McpServer) -> None","in":{},"out":"None","does":"Register write tools (each wraps a domain port, NO re-implementation): Asset(MANAGER): create_zone, update_zone, clone_zone, decommission_zone, create_system, update_system, create_service_point, update_service_point, generate_qr, decommission_service_point. Cycles(MANAGER): create_cycle, update_cycle, suspend_cycle, activate_cycle, assign_workflow_to_cycle, assign_checklist_to_cycle, set_cycle_flag. Counters(OPERATOR,MANAGER): log_operating_hours, log_operation_count, reset_counter. WorkOrders(MAINTENANCE,MANAGER): acknowledge_work_order, reject_work_order, snooze_work_order, update_work_order_item_status, record_measurement, submit_work_order_signature, add_work_order_comment. Tickets(OPERATOR,MANAGER,MAINTENANCE): create_repair_ticket, submit_ticket_report, submit_ticket_feedback, accept_ticket, escalate_ticket. Authoring(MANAGER): create_workflow, create_checklist, add_workflow_item, add_checklist_item, ai_generate_checklist. AI(any authed): ask_manual_assistant. Reporting(MANAGER,REPORTER): get_kpi_dashboard, export_report. Ops: batch_rollback."},
+        {"id":"MCP-08","fn":"register_prompts","sig":"register_prompts(server: McpServer) -> None","in":{},"out":"None","does":"Register prompt templates: prompt://cycle-analysis, prompt://overdue-triage, prompt://root-cause, prompt://zone-onboarding with parameter placeholders."},
+        {"id":"MCP-09","fn":"confirmation_gate","sig":"confirmation_gate(session: Session, tool: str, args: dict) -> PendingConfirmation | None","in":{},"out":"None to proceed, or {status: pending_confirmation, token, confirm_url}","does":"MANDATORY gates: set_cycle_flag(STOP_UNTIL_COMPLETE), decommission_zone, decommission_service_point, clone_zone, create_repair_ticket(priority=CRITICAL). Execution proceeds only via confirm(token) presented to a human. CMMS_MCP__CONFIRMATION_REQUIRED=true default."},
+        {"id":"MCP-10","fn":"apply_dry_run","sig":"apply_dry_run(tool: str, args: dict) -> DryRunResult | None","in":{"args":"may contain dry_run: true"},"out":"{would_persist: [...], validation: ok|errors} or None","does":"Every write tool accepts dry_run; validate inputs, compute side-effects, return expected result WITHOUT persisting."},
+        {"id":"MCP-11","fn":"rate_limit","sig":"rate_limit(session: Session, tool: str) -> None","in":{},"out":"None","does":"Via CACHE.allow: write tools max 30/min/session; AI-assist tools max 10/min/session; plus global REST limiter inheritance."},
+        {"id":"MCP-12","fn":"ceiling","sig":"ceiling(session: Session, tool: str) -> None","in":{},"out":"None","does":"Session-hour caps: <=50 work orders, <=50 tickets; exceed -> quota error."},
+        {"id":"MCP-13","fn":"safety_flag_guard","sig":"safety_flag_guard(session: Session, tool: str, args: dict) -> None","in":{},"out":"None","does":"MCP agent cannot clear/downgrade a STOP_UNTIL_COMPLETE flag set by a human; escalation only. Raise on violation."},
+        {"id":"MCP-14","fn":"batch_rollback","sig":"batch_rollback(session: Session, n: int) -> RollbackResult","tool":"batch_rollback","in":{"n":"operations to undo"},"out":"{rolled_back: int, skipped: [{reason}]}","does":"Undo last N session writes within window (default 5 min, CMMS_MCP__ROLLBACK_WINDOW_S) ONLY if no human modified those records since; transactional."},
+        {"id":"MCP-15","fn":"audit_call","sig":"audit_call(session: Session, tool: str, args: dict, result: str) -> None","in":{"result":"SUCCESS | FAILED | PENDING_CONFIRMATION"},"out":"None","does":"AUD.record with actor_type=MCP_AGENT, actor_id=session/key id, action=tool, input_hash=sha256(payload), ip/user-agent of orchestrator. Powers AI Activity Log."},
+        {"id":"MCP-16","fn":"health_check","sig":"health_check() -> HealthReport","in":{},"out":"HealthReport","does":"Transport liveness + auth bridge self-test + downstream port reachability; served at /health on HTTP transport."}
+      ]
+    }
+  ],
+
+  "global_event_catalog": [
+    "user.registered", "user.verified", "user.logged_in", "user.password_reset", "user.role_changed", "user.deactivated",
+    "org.created", "org.updated", "invitation.sent", "invitation.accepted", "invitation.expired", "membership.changed", "payment.overdue", "payment.cleared",
+    "asset.zone.created", "asset.zone.updated", "asset.zone.decommissioned", "asset.zone.cloned", "asset.system.created", "asset.system.updated", "asset.system.decommissioned", "asset.service_point.created", "asset.service_point.updated", "asset.service_point.decommissioned",
+    "counter.logged", "counter.reset", "safety_flag.changed",
+    "template.created", "template.updated", "template.archived",
+    "cycle.created", "cycle.updated", "cycle.suspended", "cycle.activated", "cycle.due", "cycle.missed", "cycle.eval_failed",
+    "work_order.generated", "work_order.acknowledged", "work_order.rejected", "work_order.snoozed", "work_order.resumed", "work_order.blocked", "work_order.completed", "work_order.closed", "work_order.overdue", "wo_item.updated", "wo_item.measured", "wo_item.signed",
+    "ticket.created", "ticket.claimed", "ticket.assigned", "ticket.report_submitted", "ticket.feedback_requested", "ticket.accepted", "ticket.escalated", "ticket.closed",
+    "file.uploaded", "file.deleted", "manual.ingestion_requested",
+    "ai.checklist_completed", "ai.checklist_failed", "ai.ingestion_completed", "ai.ingestion_failed", "ai.assistant_answered",
+    "notification.created", "notification.read", "notification.expired",
+    "export.ready", "mcp.tool_invoked", "module.health_changed"
+  ],
+
+  "beat_schedule": [
+    {"task": "evaluate_due_cycles", "module": "cycles", "cadence": "~1 min"},
+    {"task": "detect_missed_cycles", "module": "cycles", "cadence": "~5 min"},
+    {"task": "flag_overdue_work_orders", "module": "workorders", "cadence": "~5 min"},
+    {"task": "resume_snoozed", "module": "workorders", "cadence": "~1 min + delayed queue"},
+    {"task": "expire_invitations", "module": "tenancy", "cadence": "hourly"},
+    {"task": "expire_notifications", "module": "notify", "cadence": "daily"},
+    {"task": "sweep_expired_tokens", "module": "auth", "cadence": "daily"},
+    {"task": "refresh_metrics", "module": "reports", "cadence": "~15 min"},
+    {"task": "retry_failed_ingestions", "module": "ai", "cadence": "~10 min"}
+  ]
+}
