@@ -1,0 +1,344 @@
+"""
+CMMS SaaS Server - Chunk 1 Development Results
+
+This file tracks the implementation results of Chunk #1 (Core Kernel & Module System).
+Each function/module is documented with inputs, outputs, and test conditions.
+"""
+
+{
+    "chunk": 1,
+    "name": "Core Kernel & Module System",
+    "wave": 0,
+    "status": "completed",
+    "modules_implemented": ["core", "shared"],
+    "files_created": [
+        {
+            "path": "/src/server/core/__init__.py",
+            "purpose": "Core module public API - exports all kernel functions",
+            "result": "built",
+            "exports": [
+                "ModuleBase", "ModuleMeta", "Application", "HealthReport", "HealthStatus",
+                "SettingsBundle", "DependencyCycleError", "UnknownDependencyError",
+                "discover_modules", "validate_dependency_graph", "topological_order",
+                "boot", "shutdown", "register_service", "get_service", "publish",
+                "subscribe", "load_settings", "module_settings", "get_logger",
+                "utcnow", "new_id", "new_request_id", "poll_health", "supervise",
+                "feature_enabled"
+            ]
+        },
+        {
+            "path": "/src/server/core/module_base.py",
+            "purpose": "Abstract base class for all modules",
+            "result": "built",
+            "classes": ["HealthStatus", "ModuleMeta", "ModuleContext", "ModuleBase"],
+            "functions": {
+                "ModuleBase.configure": {
+                    "signature": "async configure(settings: Any) -> None",
+                    "inputs": {"settings": "Pydantic Settings object from core.module_settings(name)"},
+                    "outputs": "None",
+                    "conditions": ["Called during boot before initialize()", "Store settings for later use"]
+                },
+                "ModuleBase.initialize": {
+                    "signature": "async initialize(ctx: ModuleContext) -> None",
+                    "inputs": {"ctx": "ModuleContext with platform-level context"},
+                    "outputs": "None",
+                    "conditions": ["Called after configure()", "Create DB tables, pools, caches"]
+                },
+                "ModuleBase.start": {
+                    "signature": "async start() -> None",
+                    "inputs": {},
+                    "outputs": "None",
+                    "conditions": ["Called after initialize()", "Start background loops, register tasks"]
+                },
+                "ModuleBase.stop": {
+                    "signature": "async stop() -> None",
+                    "inputs": {},
+                    "outputs": "None",
+                    "conditions": ["Called during shutdown", "Drain in-flight work, close connections"]
+                },
+                "ModuleBase.health": {
+                    "signature": "async health() -> dict",
+                    "inputs": {},
+                    "outputs": {"status": "HealthStatus", "checks": "list of check results", "ts": "datetime"},
+                    "conditions": ["Called periodically by supervisor", "Must return within 2s timeout"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/registry.py",
+            "purpose": "Typed service registry for cross-module communication",
+            "result": "built",
+            "classes": ["ServiceNotRegisteredError", "InterfaceMismatchError", "DuplicateServiceError", "ServiceRegistry"],
+            "functions": {
+                "register_service": {
+                    "signature": "register_service(name: str, port: Any, interface: type) -> None",
+                    "inputs": {"name": "Service name e.g. 'db'", "port": "Implementation instance", "interface": "Protocol/type"},
+                    "outputs": "None",
+                    "conditions": ["Raises DuplicateServiceError on duplicate name"]
+                },
+                "get_service": {
+                    "signature": "get_service(name: str, interface: type) -> Any",
+                    "inputs": {"name": "Service name", "interface": "Expected Protocol"},
+                    "outputs": "The registered port instance",
+                    "conditions": ["Raises ServiceNotRegisteredError if not found", "Raises InterfaceMismatchError on type mismatch"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/event_bus.py",
+            "purpose": "Async event publishing with subscriber isolation",
+            "result": "built",
+            "classes": ["Subscription", "EventBus"],
+            "functions": {
+                "subscribe": {
+                    "signature": "subscribe(event: str, handler: Callable, post_commit: bool = False) -> None",
+                    "inputs": {"event": "Event name or '*' for wildcard", "handler": "Async callable(payload)", "post_commit": "Defer until DB commit"},
+                    "outputs": "None",
+                    "conditions": ["Raises ValueError on duplicate (event, handler) pair"]
+                },
+                "publish": {
+                    "signature": "async publish(event: str, payload: dict, post_commit: bool = False) -> None",
+                    "inputs": {"event": "Dot-delimited name e.g. 'cycle.due'", "payload": "JSON-serializable dict", "post_commit": "Queue for post-commit delivery"},
+                    "outputs": "None",
+                    "conditions": ["Subscriber failures isolated - one failing listener never breaks others", "Wildcard '*' subscribers receive ALL events"]
+                },
+                "flush_post_commit": {
+                    "signature": "async flush_post_commit() -> None",
+                    "inputs": {},
+                    "outputs": "None",
+                    "conditions": ["Called by DB module after successful transaction commit"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/settings.py",
+            "purpose": "Environment-based configuration with Pydantic validation",
+            "result": "built",
+            "classes": ["SettingsLoadError", "ModuleSettingsWrapper", "SettingsBundle", "SettingsLoader"],
+            "env_format": "CMMS_<MODULE>__<KEY> e.g. CMMS_DB__URL, CMMS_CACHE__URL",
+            "functions": {
+                "load_settings": {
+                    "signature": "load_settings() -> SettingsBundle",
+                    "inputs": {},
+                    "outputs": "SettingsBundle with per-module validated settings",
+                    "conditions": ["Fails boot with field-level error list on invalid config", "Secrets never logged"]
+                },
+                "module_settings": {
+                    "signature": "module_settings(name: str) -> BaseModel | None",
+                    "inputs": {"name": "Module name e.g. 'db', 'cache'"},
+                    "outputs": "Module's pydantic Settings instance or None",
+                    "conditions": ["Used by modules during configure()"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/dependency.py",
+            "purpose": "Dependency graph validation and topological sorting",
+            "result": "built",
+            "classes": ["DependencyCycleError", "UnknownDependencyError", "DependencyGraphValidator"],
+            "functions": {
+                "validate_dependency_graph": {
+                    "signature": "validate_dependency_graph(modules: list[ModuleMeta]) -> None",
+                    "inputs": {"modules": "Discovered metadata list"},
+                    "outputs": "None",
+                    "conditions": ["Raises UnknownDependencyError if dependency references unknown module", "Raises DependencyCycleError(cycle_path) if cycle detected"]
+                },
+                "topological_sort": {
+                    "signature": "topological_sort(modules: list[ModuleMeta]) -> list[str]",
+                    "inputs": {"modules": "Validated metadata list"},
+                    "outputs": "List of module names in start order",
+                    "conditions": ["Uses Kahn's algorithm", "Alphabetical tie-break for determinism"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/discovery.py",
+            "purpose": "Module discovery by scanning package for ModuleBase subclasses",
+            "result": "built",
+            "classes": ["DuplicateModuleError"],
+            "functions": {
+                "discover_modules": {
+                    "signature": "discover_modules(package_root: str = 'modules') -> list[ModuleMeta]",
+                    "inputs": {"package_root": "Python package path to scan"},
+                    "outputs": "List of ModuleMeta for each discovered module",
+                    "conditions": ["Raises DuplicateModuleError if two modules declare same name", "Returns empty list if package doesn't exist yet"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/boot.py",
+            "purpose": "Boot orchestration - coordinates full module lifecycle",
+            "result": "built",
+            "classes": ["Application", "BootOrchestrator"],
+            "boot_sequence": [
+                "1. load_settings() - Parse env vars",
+                "2. setup_structured_logging() - Initialize logging",
+                "3. discover_modules() - Find all ModuleBase subclasses",
+                "4. validate_dependency_graph() - Check for cycles/unknown deps",
+                "5. topological_order() - Sort modules",
+                "6. Filter by profile (api|worker|beat|mcp|all-in-one)",
+                "7. For each module: configure() -> initialize(ctx) -> start()"
+            ],
+            "functions": {
+                "boot": {
+                    "signature": "boot(profile: str) -> Application",
+                    "inputs": {"profile": "api | worker | beat | mcp | all-in-one"},
+                    "outputs": "Application{registry, event_bus, settings, started_modules}",
+                    "conditions": ["Logs each module name+version on boot", "Shutdown already-started modules on failure"]
+                },
+                "shutdown": {
+                    "signature": "shutdown(app: Application) -> None",
+                    "inputs": {"app": "Booted application"},
+                    "outputs": "None",
+                    "conditions": ["Stops modules in reverse topological order", "Each module drains in-flight work"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/health.py",
+            "purpose": "Concurrent module health polling",
+            "result": "built",
+            "classes": ["HealthReport", "HealthPoller"],
+            "functions": {
+                "poll": {
+                    "signature": "async poll(timeout_s: float = 2.0) -> dict[str, HealthReport]",
+                    "inputs": {"timeout_s": "Per-module timeout in seconds"},
+                    "outputs": "Map of module name -> HealthReport",
+                    "conditions": ["Calls every module's health() concurrently", "Timed-out modules reported as UNAVAILABLE"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/supervisor.py",
+            "purpose": "Background health monitoring and degradation propagation",
+            "result": "built",
+            "classes": ["Supervisor"],
+            "functions": {
+                "run": {
+                    "signature": "async run(interval_s: int = 30) -> None",
+                    "inputs": {"interval_s": "Poll period in seconds"},
+                    "outputs": "None",
+                    "conditions": ["Background loop until stop() called", "Emits module.health_changed events on transitions"]
+                },
+                "_propagate_degradation": {
+                    "signature": "async _propagate_degradation(failed_module: str) -> None",
+                    "inputs": {"failed_module": "Name of UNAVAILABLE module"},
+                    "outputs": "None",
+                    "conditions": ["Marks dependent modules as DEGRADED if hard dep is UNAVAILABLE"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/utils.py",
+            "purpose": "Utility functions - clock, IDs, masking",
+            "result": "built",
+            "functions": {
+                "utcnow": {"signature": "utcnow() -> datetime", "outputs": "TZ-aware UTC datetime", "conditions": ["ONLY clock source - never use datetime.now() directly"]},
+                "new_id": {"signature": "new_id() -> UUID", "outputs": "UUID v4", "conditions": ["Standard ID generator for all business records"]},
+                "new_request_id": {"signature": "new_request_id() -> str", "outputs": "16-char hex string", "conditions": ["Request correlation for distributed tracing"]}
+            }
+        },
+        {
+            "path": "/src/server/core/logger.py",
+            "purpose": "Structured JSON logging with module namespacing",
+            "result": "built",
+            "classes": ["StructuredFormatter", "ModuleLoggerAdapter", "RequestLoggerFilter"],
+            "functions": {
+                "setup_structured_logging": {
+                    "signature": "setup_structured_logging(level: int = INFO, include_locals: bool = False) -> None",
+                    "inputs": {"level": "Logging level", "include_locals": "Include local vars in errors"},
+                    "outputs": "None",
+                    "conditions": ["Call once at startup", "JSON output with ts, level, module, message, request_id"]
+                },
+                "get_logger": {
+                    "signature": "get_logger(name: str) -> ModuleLoggerAdapter",
+                    "inputs": {"name": "Module name e.g. 'core', 'db'"},
+                    "outputs": "Logger with module field set",
+                    "conditions": ["Use for all module logging"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/core/feature_flags.py",
+            "purpose": "Environment-based feature toggles",
+            "result": "built",
+            "functions": {
+                "feature_enabled": {
+                    "signature": "feature_enabled(flag: str) -> bool",
+                    "inputs": {"flag": "Flag name e.g. 'MCP_SERVER'"},
+                    "outputs": "True if CMMS_FEATURE_<FLAG> is truthy",
+                    "conditions": ["Truthy values: 1, true, yes, on, enabled (case-insensitive)", "Default false if not set"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/shared/types.py",
+            "purpose": "Shared types and domain errors",
+            "result": "built",
+            "classes": ["Role", "HealthStatus", "RequestContext", "Page", "ErrorResponse", "DomainError", "NotFoundError", "ForbiddenError", "UnauthorizedError", "QuotaExceededError", "InvalidTransitionError"]
+        },
+        {
+            "path": "/src/server/shared/events_catalog.py",
+            "purpose": "Centralized event definitions",
+            "result": "built",
+            "events_defined": 50,
+            "categories": ["core", "auth", "tenancy", "assets", "templates", "cycles", "workorders", "tickets", "files", "ai", "notifications", "exports"]
+        }
+    ],
+    "test_conditions": {
+        "kernel_boot_test": {
+            "description": "Boot kernel with dummy module set",
+            "steps": [
+                "1. Create dummy module subclassing ModuleBase",
+                "2. Set CMMS_DUMMY__VERSION=1.0.0 env var",
+                "3. Call core.boot('all-in-one')",
+                "4. Verify module appears in app.started_modules",
+                "5. Verify module.configure(), initialize(), start() were called in order"
+            ],
+            "expected": "All modules booted successfully with logged name+version"
+        },
+        "dependency_cycle_test": {
+            "description": "Detect dependency cycle and fail fast",
+            "steps": [
+                "1. Create module A depending on B",
+                "2. Create module B depending on A",
+                "3. Call validate_dependency_graph([A, B])"
+            ],
+            "expected": "DependencyCycleError raised with cycle_path=['A', 'B', 'A']"
+        },
+        "event_isolation_test": {
+            "description": "Subscriber failures don't affect other listeners",
+            "steps": [
+                "1. Subscribe handler_a to 'test.event'",
+                "2. Subscribe handler_b that raises exception to 'test.event'",
+                "3. Subscribe handler_c to 'test.event'",
+                "4. Publish 'test.event'"
+            ],
+            "expected": "handler_a and handler_c both executed despite handler_b failure"
+        },
+        "health_timeout_test": {
+            "description": "Timed-out modules reported as UNAVAILABLE",
+            "steps": [
+                "1. Create module with health() that sleeps 5s",
+                "2. Boot application",
+                "3. Call poll_health(timeout_s=2.0)"
+            ],
+            "expected": "Module reported as UNAVAILABLE with timeout reason"
+        }
+    },
+    "recommendations": [
+        "Chunk 1 provides stable foundation - kernel can boot empty module set",
+        "Next chunk (Wave 1): Implement infrastructure modules (db, cache, storage, email)",
+        "Ensure each new module subclasses ModuleBase and implements all lifecycle methods",
+        "Use core.register_service() to expose module ports",
+        "Use core.publish() for all domain events - never call consumers directly",
+        "All timestamps must use core.utcnow() - never datetime.now()",
+        "All IDs must use core.new_id() for consistency"
+    ],
+    "next_chunk": {
+        "id": 2,
+        "name": "Infrastructure Layer - DB, Cache, Storage, Email",
+        "wave": 1,
+        "modules": ["db", "cache", "storage", "email"]
+    }
+}
