@@ -1,10 +1,8 @@
-================================================================================
-OPEN-SOURCE CMMS SAAS - MVP SOFTWARE ARCHITECTURE DOCUMENT
-REVISED TO SUPPORT FULL MVP REQUIREMENTS + AI PHASE 1 & PHASE 2
-================================================================================
 
-1. SYSTEM OVERVIEW
---------------------------------------------------------------------------------
+# OPEN-SOURCE CMMS SAAS - MVP SOFTWARE ARCHITECTURE DOCUMENT
+
+## 1. SYSTEM OVERVIEW
+
 The system is a multi-tenant, role-based, open-source Computerized Maintenance
 Management System (CMMS) delivered as a web-based SaaS.
 
@@ -28,8 +26,8 @@ The architecture shall support:
 - Background processing for cycles, notifications, AI, and file ingestion.
 - API-first integration and OpenAPI documentation.
 
-2. TECHNOLOGY STACK
---------------------------------------------------------------------------------
+## 2. TECHNOLOGY STACK
+
 Frontend Client:
 - React 18+
 - TypeScript
@@ -75,8 +73,7 @@ Storage:
 Email:
 - Transactional email abstraction for signup verification and password reset
 - SMTP or email API provider
-- No operational email notifications in MVP; operational notifications are
-  in-app only
+- No operational email notifications in MVP; operational notifications are in-app only
 
 AI:
 - Text LLM integration for checklist generation
@@ -96,31 +93,31 @@ Infrastructure:
 - Health check endpoints
 - Environment-based configuration
 
-3. HIGH-LEVEL COMPONENT MODEL
---------------------------------------------------------------------------------
+## 3. HIGH-LEVEL COMPONENT MODEL
+
 The system shall consist of the following major components:
 
-1. React SPA Client
+### 1. React SPA Client
    - User-facing web application.
    - Supports RTL/LTR.
    - Communicates only with backend REST API.
    - Uses QR scanning, dashboards, work orders, tickets, notifications,
      AI checklist generation, and AI manual assistant.
 
-2. FastAPI Backend API
+### 2. FastAPI Backend API
    - Stateless REST API.
    - Performs authentication, authorization, validation, and domain orchestration.
    - Exposes OpenAPI documentation.
    - Enforces tenant isolation and role-based permissions.
 
-3. Background Worker Service
+### 3. Background Worker Service
    - Celery workers.
    - Handles cycle evaluation, work order generation, notification expiration,
      invitation expiration, report generation, zone cloning, file ingestion,
      AI embedding generation, AI checklist generation, and AI assistant calls
      when asynchronous processing is preferred.
 
-4. Celery Beat Scheduler
+### 4. Celery Beat Scheduler
    - Runs periodic jobs:
      - Evaluate due calendar cycles.
      - Detect missed cycles and overdue work orders.
@@ -129,32 +126,32 @@ The system shall consist of the following major components:
      - Archive/expire notifications after 30 days.
      - Refresh dashboard materialized metrics if used.
 
-5. PostgreSQL Database
+### 5. PostgreSQL Database
    - Primary transactional system of record.
    - Stores tenant data, assets, cycles, work orders, tickets, notifications,
      audit logs, AI metadata, and vector embeddings.
 
-6. Redis
+### 6. Redis
    - Celery broker.
    - Rate limiting.
    - Short-lived cache.
    - Delayed queues for snooze and reminders.
    - Distributed locks for background job idempotency.
 
-7. Object Storage
+### 7. Object Storage
    - Stores uploaded files, manuals, photos, generated QR codes, exports,
      and AI ingestion artifacts.
    - Tenant-prefixed paths or buckets.
 
-8. AI Subsystem
+### 8. AI Subsystem
    - Checklist generation service.
    - RAG manual assistant service.
    - Document ingestion pipeline.
    - Prompt management and provider abstraction.
    - AI usage logs and tenant-isolated vector data.
 
-4. MULTI-TENANCY AND DATA ISOLATION
---------------------------------------------------------------------------------
+## 4. MULTI-TENANCY AND DATA ISOLATION
+
 Multi-tenancy shall be enforced at multiple layers.
 
 Database Isolation:
@@ -198,8 +195,8 @@ Audit Isolation:
 - Audit logs shall record organization_id, user_id, action, entity type,
   entity ID, previous state, new state, timestamp, IP address, and user agent.
 
-5. AUTHENTICATION AND AUTHORIZATION ARCHITECTURE
---------------------------------------------------------------------------------
+## 5. AUTHENTICATION AND AUTHORIZATION ARCHITECTURE
+
 Authentication:
 - Email/password signup.
 - Mandatory email verification.
@@ -242,8 +239,8 @@ Email Verification Flow:
 4. User verifies email.
 5. User can fully access the system after organization creation or invitation.
 
-6. ORGANIZATION AND INVITATION ARCHITECTURE
---------------------------------------------------------------------------------
+## 6. ORGANIZATION AND INVITATION ARCHITECTURE
+
 Organization Management:
 - Each organization is a separate tenant.
 - Organization profile includes:
@@ -286,8 +283,8 @@ Invitations:
 - Accepting a new organization invitation requires leaving or replacing the
   previous organization membership.
 
-7. ASSET HIERARCHY DATA ARCHITECTURE
---------------------------------------------------------------------------------
+## 7. ASSET HIERARCHY DATA ARCHITECTURE
+
 Logical hierarchy:
 Organization
 -> Zone
@@ -401,8 +398,8 @@ QR / Barcode Architecture:
   - Attachments
   - Active work orders/tickets if permitted by role.
 
-8. SERVICE POINT COUNTER ARCHITECTURE
---------------------------------------------------------------------------------
+## 8. SERVICE POINT COUNTER ARCHITECTURE
+
 Counter Types:
 - Operation hours.
 - Operation count.
@@ -442,8 +439,8 @@ Counter Inheritance:
 - If influence_child_nodes is true, children cannot override inherited cycle.
 - Child counters/cycles do not influence parents.
 
-9. MAINTENANCE CYCLE ENGINE
---------------------------------------------------------------------------------
+## 9. MAINTENANCE CYCLE ENGINE
+
 Cycle Assignment Scope:
 - Zone
 - System
@@ -520,8 +517,8 @@ Cycle Scheduler:
   7. Record evaluation event.
   8. Send in-app notifications.
 
-10. SAFETY / OPERATIONAL FLAG ARCHITECTURE
---------------------------------------------------------------------------------
+## 10. SAFETY / OPERATIONAL FLAG ARCHITECTURE
+
 Supported Flags:
 - HOT_INSPECT
 - PAUSE_FOR_INSPECTION
@@ -546,8 +543,8 @@ Operational Impact:
 - Parent asset status may show halted or pending maintenance state.
 - Dashboards may filter by critical safety flags.
 
-11. WORKFLOW, CHECKLIST, AND WORK ORDER ARCHITECTURE
---------------------------------------------------------------------------------
+## 11. WORKFLOW, CHECKLIST, AND WORK ORDER ARCHITECTURE
+
 Template Types:
 - Checklist:
   - Inspection only.
@@ -686,8 +683,8 @@ Execution Updates:
 - Attachments supported per work order and per item where appropriate.
 - Digital signature captured where required.
 
-12. REPAIR TICKETING ARCHITECTURE
---------------------------------------------------------------------------------
+## 12. REPAIR TICKETING ARCHITECTURE
+
 Ticket Creation:
 - Operator and Manager can create repair tickets.
 - Ticket creation disabled for overdue organizations.
@@ -745,8 +742,8 @@ Ticket Restrictions:
 - Existing tickets remain accessible for historical resolution unless policy
   defines otherwise.
 
-13. NOTIFICATION ARCHITECTURE
---------------------------------------------------------------------------------
+## 13. NOTIFICATION ARCHITECTURE
+
 MVP notification channel:
 - In-app system notifications only.
 - No email/SMS for operational notifications.
@@ -802,8 +799,8 @@ Delivery Mechanism:
 - Optional server-sent events can be introduced later.
 - Persistent login ensures users receive alerts when authenticated.
 
-14. REPORTING AND DASHBOARD ARCHITECTURE
---------------------------------------------------------------------------------
+## 14. REPORTING AND DASHBOARD ARCHITECTURE
+
 Dashboard Users:
 - Manager
 - Reporter
@@ -845,8 +842,8 @@ Audit and Reporting:
   where permitted.
 - Reports must respect organization isolation.
 
-15. FILE STORAGE AND ATTACHMENT ARCHITECTURE
---------------------------------------------------------------------------------
+## 15. FILE STORAGE AND ATTACHMENT ARCHITECTURE
+
 Supported Attachment Types:
 - Images: JPEG, PNG
 - Documents: PDF, TXT, DOCX
@@ -902,8 +899,8 @@ Manuals and Documents:
   - COMPLETED
   - FAILED
 
-16. DATABASE ARCHITECTURE PRINCIPLES
---------------------------------------------------------------------------------
+## 16. DATABASE ARCHITECTURE PRINCIPLES
+
 Primary Database:
 - PostgreSQL 15+
 
@@ -955,8 +952,8 @@ Future Inventory Slots:
 - Work order part usage placeholder.
 - These are structural slots; full inventory is post-MVP.
 
-17. API ARCHITECTURE
---------------------------------------------------------------------------------
+## 17. API ARCHITECTURE
+
 API Style:
 - REST API.
 - Versioned base path:
@@ -964,6 +961,7 @@ API Style:
 - JSON request/response.
 - OpenAPI/Swagger documentation generated by FastAPI.
 
+```
 Authentication Endpoints:
 - POST /auth/signup
 - POST /auth/login
@@ -1051,6 +1049,7 @@ AI Assistant Endpoints:
 - POST /ai/assistant/threads/{id}/messages
 - GET /ai/assistant/threads/{id}/messages
 - POST /ai/manuals/{fileId}/reprocess
+```
 
 Validation:
 - Pydantic models validate all input.
@@ -1064,8 +1063,8 @@ Validation:
   - message
   - details
 
-18. BACKGROUND PROCESSING ARCHITECTURE
---------------------------------------------------------------------------------
+## 18. BACKGROUND PROCESSING ARCHITECTURE
+
 Celery Workers:
 - Handle asynchronous and long-running tasks.
 - Prevent API request blocking.
@@ -1126,8 +1125,8 @@ Observability:
 - Failure reasons stored.
 - Admin can inspect failed background jobs.
 
-19. AI SUBSYSTEM ARCHITECTURE
---------------------------------------------------------------------------------
+## 19. AI SUBSYSTEM ARCHITECTURE
+
 The MVP includes two AI capabilities:
 
 AI Phase 1:
@@ -1139,8 +1138,8 @@ AI Phase 2:
 Both capabilities shall be implemented with tenant isolation, auditability,
 and provider abstraction.
 
-19.1 AI Provider Abstraction
---------------------------------------------------------------------------------
+### 19.1 AI Provider Abstraction
+
 AI provider layer shall support:
 - Text completion/chat models.
 - Embedding models.
@@ -1161,8 +1160,8 @@ Model Configuration:
 - Organization-level privacy mode optional.
 - If external provider is used, prompts shall be sanitized.
 
-19.2 AI Checklist Generation
---------------------------------------------------------------------------------
+### 19.2 AI Checklist Generation
+
 Purpose:
 - Allow managers to generate draft checklists from natural language prompts.
 
@@ -1219,8 +1218,8 @@ Privacy:
 - Prompt shall not include user personal data.
 - Prompt may include equipment type and maintenance context.
 
-19.3 RAG Manual Assistant
---------------------------------------------------------------------------------
+### 19.3 RAG Manual Assistant
+
 Purpose:
 - Provide maintenance users with an interactive assistant grounded in the
   manuals/documents attached to a specific service point.
@@ -1286,8 +1285,8 @@ AI Rate Limits:
 - Per-user and per-organization limits recommended.
 - Queue or throttle long-running assistant requests.
 
-20. AUDIT LOGGING AND COMPLIANCE ARCHITECTURE
---------------------------------------------------------------------------------
+## 20. AUDIT LOGGING AND COMPLIANCE ARCHITECTURE
+
 Audit logs shall be immutable or append-only.
 
 Audited Events:
@@ -1328,8 +1327,8 @@ Implementation:
 - Background worker may batch persist non-critical logs.
 - Sys admin actions always logged.
 
-21. SECURITY ARCHITECTURE
---------------------------------------------------------------------------------
+## 21. SECURITY ARCHITECTURE
+
 Transport Security:
 - HTTPS enforced.
 - SSL termination at reverse proxy/WAF.
@@ -1387,8 +1386,8 @@ Secrets:
 - No secrets in code repository.
 - Separate secrets for dev/staging/prod.
 
-22. FRONTEND ARCHITECTURE
---------------------------------------------------------------------------------
+## 22. FRONTEND ARCHITECTURE
+
 Frontend Application:
 - React SPA.
 - TypeScript.
@@ -1468,8 +1467,8 @@ Offline Support:
 - Application requires active internet connection.
 - Explicitly excluded to avoid scope creep.
 
-23. REPORTING EXPORT ARCHITECTURE
---------------------------------------------------------------------------------
+## 23. REPORTING EXPORT ARCHITECTURE
+
 Export Request Flow:
 1. User selects report filters.
 2. User requests export.
@@ -1488,8 +1487,9 @@ Export Security:
 - Exports stored under organization path.
 - Download URLs expire.
 
-24. DEPLOYMENT TOPOLOGY
---------------------------------------------------------------------------------
+## 24. DEPLOYMENT TOPOLOGY
+
+```
 Internet Traffic:
 [Internet]
    |
@@ -1501,6 +1501,7 @@ Internet Traffic:
    ├── /static/* -> React SPA static assets
    └── /storage/* -> MinIO/S3 or pre-signed redirect
    └── /mcp/* -> [MCP Server] (authenticated, rate-limited)
+```
 
 Application Services:
 - nginx
@@ -1551,10 +1552,10 @@ Optional Supporting Services:
 - Prometheus/Grafana optional.
 - Log aggregator optional.
 
-25. MCP SERVER — EXTERNAL AI OPERABILITY
---------------------------------------------------------------------------------
-25.1 Purpose
-------------
+## 25. MCP SERVER — EXTERNAL AI OPERABILITY
+
+### 25.1 Purpose
+
 The system shall expose a Model Context Protocol (MCP) server that publishes
 the full CMMS capability surface (tools, resources, and prompts) so that an
 external AI agent can query, operate, and automate the system autonomously.
@@ -1563,8 +1564,8 @@ The MCP server is a read/write bridge, not a replacement for the REST API.
 It wraps the same domain services the REST API uses, inheriting every
 multi-tenancy, RBAC, and safety rule already defined.
 
-25.2 Protocol & Transport
--------------------------
+###25.2 Protocol & Transport
+
 - Protocol: MCP (Model Context Protocol), JSON-RPC 2.0 based.
 - Transport: Stdio (for local/sidecar agents) and Streamable HTTP / SSE
   (for remote agents and cloud-hosted AI orchestrators).
@@ -1572,8 +1573,9 @@ multi-tenancy, RBAC, and safety rule already defined.
 - Version pinning: the server shall advertise supported MCP spec versions
   and reject unsupported clients.
 
-25.3 Deployment Position
-------------------------
+###25.3 Deployment Position
+
+```
 [External AI Agent / Orchestrator]
         |
         | MCP (Stdio or HTTP/SSE)
@@ -1586,14 +1588,15 @@ multi-tenancy, RBAC, and safety rule already defined.
         |
    ┌────┴────┐
 [PostgreSQL] [Redis] [MinIO] [Celery]
+```
 
 The MCP server runs as an independent Docker service ("mcp") in the
 compose stack. It does NOT expose HTTP endpoints to the public internet
 by default; it sits behind Nginx or a private network, reachable only by
 authorized AI orchestrators.
 
-25.4 Authentication & Tenant Scoping
-------------------------------------
+### 25.4 Authentication & Tenant Scoping
+
 - Every MCP session must authenticate before any tool/resource call.
 - Accepted credential types:
   a) Short-lived JWT (same 15-min access + refresh model as REST).
@@ -1603,8 +1606,8 @@ authorized AI orchestrators.
 - Cross-tenant access is impossible by construction: the same RLS and
   org_id filters used by the REST API apply.
 
-25.5 RBAC Mapping for MCP Agents
---------------------------------
+### 25.5 RBAC Mapping for MCP Agents
+
 An MCP session operates under exactly one of the existing roles:
   MANAGER, REPORTER, OPERATOR, MAINTENANCE.
 There is no separate "MCP role". The external AI inherits whatever
@@ -1619,10 +1622,11 @@ Recommended practice:
 The SYS_ADMIN role shall NOT be exposed through MCP under any
 circumstance.
 
-25.6 Exposed MCP Resources (Read Surface)
-------------------------------------------
+### 25.6 Exposed MCP Resources (Read Surface)
+
 Resources are read-only data the AI can retrieve.
 
+``` MCP
   cmms://assets/zones
   cmms://assets/systems
   cmms://assets/service-points/{id}
@@ -1637,11 +1641,12 @@ Resources are read-only data the AI can retrieve.
   cmms://tickets/{id}
   cmms://reports/kpis
   cmms://notifications
+```
 
 Each resource honours the caller's role and organization scope.
 
-25.7 Exposed MCP Tools (Write / Action Surface)
--------------------------------------------------
+### 25.7 Exposed MCP Tools (Write / Action Surface)
+
 Tools are actions the AI can invoke. Grouped by domain:
 
 Asset Management (MANAGER only):
@@ -1686,8 +1691,8 @@ AI Assistant (any authenticated role):
 Reporting (MANAGER, REPORTER):
   get_kpi_dashboard, export_report
 
-25.8 Exposed MCP Prompts (Guided Templates)
---------------------------------------------
+### 25.8 Exposed MCP Prompts (Guided Templates)
+
 Pre-built prompt templates the external AI can load:
 
   prompt://cycle-analysis
@@ -1699,8 +1704,8 @@ Pre-built prompt templates the external AI can load:
   prompt://zone-onboarding
     → "Guide me through setting up a new zone with systems and nodes."
 
-25.9 Safety Guardrails for Autonomous Operation
-------------------------------------------------
+### 25.9 Safety Guardrails for Autonomous Operation
+
 Because the MCP server grants an external AI write access to a
 maintenance-safety-critical system, the following guardrails are
 MANDATORY:
@@ -1740,8 +1745,8 @@ f) Rollback Window
    within a configurable window (default 5 minutes), provided no
    human has acted on those records in the interim.
 
-25.10 Audit & Traceability
----------------------------
+### 25.10 Audit & Traceability
+
 - Every MCP tool call is logged in the existing audit_logs table with:
     actor_type = "MCP_AGENT"
     actor_id   = MCP session / API key identifier
@@ -1753,8 +1758,8 @@ f) Rollback Window
 - An organization manager can view a filtered "AI Activity Log"
   showing every MCP-driven change.
 
-25.11 MCP Server Technology
-----------------------------
+### 25.11 MCP Server Technology
+
 - Language: Python 3.11+ (same as backend).
 - Framework: "mcp" Python SDK (official Model Context Protocol SDK)
   or equivalent maintained library.
@@ -1771,10 +1776,10 @@ f) Rollback Window
     MCP_CONFIRMATION_REQUIRED=true|false
     MCP_DRY_RUN_DEFAULT=false
 
-25.12 Updated Docker Compose Service
---------------------------------------
-Add to the existing compose stack:
+### 25.12 Updated Docker Compose Service
 
+Add to the existing compose stack:
+```
   mcp:
     build: ./services/mcp
     depends_on: [api, db, redis]
@@ -1787,9 +1792,11 @@ Add to the existing compose stack:
     ports:
       - "8100:8100"   # expose only on private network by default
     restart: unless-stopped
+```
 
-25.13 Updated Deployment Topology Diagram
--------------------------------------------
+### 25.13 Updated Deployment Topology Diagram
+
+```
 [Internet]
     |
 [Cloudflare / WAF]
@@ -1809,11 +1816,11 @@ Add to the existing compose stack:
     | Shared domain service layer
     v
 [FastAPI domain services] → [PostgreSQL] / [Redis] / [MinIO] / [Celery]
+```
 
 
+## 26. OBSERVABILITY AND OPERATIONS
 
-26. OBSERVABILITY AND OPERATIONS
---------------------------------------------------------------------------------
 Health Checks:
 - /health/live
 - /health/ready
@@ -1855,8 +1862,8 @@ Configuration:
 - Separate dev/staging/prod.
 - Feature flags for AI provider mode.
 
-27. TESTING STRATEGY
---------------------------------------------------------------------------------
+## 27. TESTING STRATEGY
+
 Backend Tests:
 - Unit tests for domain logic.
 - API integration tests.
@@ -1901,8 +1908,8 @@ CI/CD:
 - Deploy to staging.
 - Optional production deployment with manual approval.
 
-28. DATA MODEL SUMMARY
---------------------------------------------------------------------------------
+## 28. DATA MODEL SUMMARY
+
 Major entity groups:
 
 Identity and Tenancy:
@@ -1976,8 +1983,8 @@ Files and AI:
 Vector Data:
 - document_chunks.embedding using pgvector
 
-29. MVP SCOPE BOUNDARIES
---------------------------------------------------------------------------------
+## 29. MVP SCOPE BOUNDARIES
+
 Included in MVP:
 - Full core CMMS flows.
 - Multi-tenant isolation.
@@ -2015,8 +2022,8 @@ Explicitly excluded from MVP:
 - Full UI multi-language localization.
 - Email/SMS operational notifications.
 
-30. ARCHITECTURAL DECISIONS AND RATIONALE
---------------------------------------------------------------------------------
+## 30. ARCHITECTURAL DECISIONS AND RATIONALE
+
 Decision: FastAPI + Celery + PostgreSQL + Redis
 Reason: Supports async API, background jobs, scheduled tasks, and scalable
 MVP architecture.
@@ -2051,8 +2058,4 @@ Reason: Allows external LLMs for convenience and local models for privacy.
 
 31. END OF ARCHITECTURE DOCUMENT
 --------------------------------------------------------------------------------
-This architecture shall support the full MVP technical requirements, including
-multi-tenancy, strict security, asset hierarchy, cycle automation, work orders,
-repair ticketing, notifications, reporting, QR access, file storage, audit
-logging, timezone normalization, soft deletion, OpenAPI documentation, and
-AI Phase 1 / Phase 2 capabilities.
+This architecture shall support the full MVP technical requirements, including multi-tenancy, strict security, asset hierarchy, cycle automation, work orders, repair ticketing, notifications, reporting, QR access, file storage, audit logging, timezone normalization, soft deletion, OpenAPI documentation, and AI basic capabilities.
