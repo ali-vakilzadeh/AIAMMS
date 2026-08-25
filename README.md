@@ -1,21 +1,55 @@
 Tribute to OpenSource Community
 
-# Open-Source CMMS SaaS + AI copilot + MCP accessibility project
+# Open-Source CMMS SaaS + AI Copilot + MCP Accessibility Project
 
-## 📋 Project Status: **Active Development Phase** (with vibe coding)
+## 📋 Project Status: **Active Development - Core Engine Complete**
 
-This project is currently in the **development phase**. Completion progress will be reported accordingly as development milestones are achieved.
+**Development Progress: 10 of 12 roadmap chunks completed (83%)**
+
+| Wave | Chunk | Module | Status | Description |
+|------|-------|--------|--------|-------------|
+| 0 | 1 | Core Kernel | ✅ Completed | Microkernel with module discovery, dependency graph, event bus, health supervision |
+| 1 | 2 | Infrastructure | ✅ Completed | PostgreSQL (RLS), Redis cache, S3/MinIO storage, email services |
+| 1 | 3 | API & Worker | ✅ Completed | FastAPI surface, Celery task engine with idempotency |
+| 2 | 4 | Auth | ✅ Completed | JWT auth, RBAC, password flows, session management |
+| 2 | 5 | Tenancy | ✅ Completed | Multi-tenancy, subscription tiers, quota enforcement, invitations |
+| 3 | 6 | Assets | ✅ Completed | Asset hierarchy (zones/systems/service points), counters, QR codes, safety flags |
+| 3 | 7 | Templates | ⏳ Pending | Workflow & checklist templates |
+| 4 | 8 | Cycles | ✅ Completed | Maintenance cycle engine with calendar/hours/count triggers, evaluation logic |
+| 4 | 9 | Work Orders | ✅ Completed | WO lifecycle: acknowledge/reject/snooze, execution, measurements, signatures |
+| 5 | 10 | Tickets & Files | ✅ Completed | Repair ticketing with 5-step flow, file attachments with policy validation |
+| 5 | 11 | AI Module | ✅ Completed | Checklist generation (LLM), RAG manual assistant with pgvector embeddings |
+| 6 | 12 | MCP Server | ⏳ Pending | External AI agent interface for full system accessibility |
+
+**Current Phase**: Core maintenance engine operational. Templates (Chunk 7) and MCP Server (Chunk 12) remain for completion.
 
 ---
 
 ## 🎯 Project Overview
 
-An open-source **Computerized Maintenance Management System (CMMS)** delivered as a web-based SaaS platform. The system enables organizations to manage maintenance operations, asset hierarchies, work orders, and repair tickets with strict multi-tenancy and data isolation. The project is intrinsically integrated with an AI agent to provide / suggest maintenance schedules. Also the system is fully accessible through MCP to be operated via external AI.
+An open-source **Computerized Maintenance Management System (CMMS)** delivered as a web-based SaaS platform with **AI-native integration** and **full AI agent accessibility via MCP**. Unlike conventional CMMS systems, this platform is designed from the ground up to be operated both by humans and AI agents equally.
+
+### What Makes This Different from Conventional CMMS?
+
+| Feature | Traditional CMMS | This Platform |
+|---------|------------------|---------------|
+| **AI Integration** | Bolt-on analytics or chatbot | Native AI copilot embedded in core workflow (checklist generation, RAG manual assistant) |
+| **Accessibility** | Human-only UI/API | Full MCP (Model Context Protocol) support - external AI agents can operate the entire system |
+| **Architecture** | Monolithic or tightly-coupled modules | Microkernel design with isolated, health-monitored modules that can be independently developed and tested |
+| **Multi-Tenancy** | Shared database with application-level filtering | PostgreSQL Row-Level Security (RLS) enforced at database level for strict data isolation |
+| **Maintenance Triggers** | Simple calendar or meter readings | Multi-trigger cycles (calendar/cron, operating hours, operation counts) with inheritance propagation and "first satisfied wins" logic |
+| **Safety Integration** | Separate safety systems or manual flags | Built-in safety flags (HOT_INSPECT, PAUSE_FOR_INSPECTION, STOP_UNTIL_COMPLETE) that propagate through hierarchy and halt parent operations |
+| **Ticket Resolution** | Open-ended feedback loops | Enforced 5-step circulation with maximum 3 feedback loops, auto-escalation to prevent infinite rework |
+| **Counter Inheritance** | Manual entry per asset | Top-down counter inheritance with influence propagation - log once at parent, children inherit automatically |
+| **QR Code Access** | Static labels linking to fixed URLs | Dynamic QR resolution showing role-filtered views (manuals, work orders, tickets, history) based on who scans |
+| **Zone Cloning** | Manual recreation or export/import | One-click zone cloning with background worker replication preserving structure, custom fields, and generating unique IDs |
+| **Data Privacy (AI)** | Send all data to LLM provider | PII and organization ID stripped before any external LLM call, vector embeddings stored locally in pgvector |
 
 ### Target Platforms
 - Web browser (Desktop, Mobile, Tablet)
 - Full internet accessibility
 - QR code scanning capability for field data access
+- **External AI agents via MCP protocol**
 
 ---
 
