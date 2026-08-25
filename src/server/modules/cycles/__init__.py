@@ -1,0 +1,62 @@
+"""Cycles Module - Maintenance Cycle Engine
+
+This module implements the cycle management system for preventive maintenance.
+It handles cycle CRUD, triggers (calendar/hours/count), winner logic, suspension,
+missed-cycle detection, and idempotent evaluation emitting cycle.due events.
+"""
+
+from .service import (
+    create_cycle,
+    update_cycle,
+    list_cycles,
+    get_cycle,
+    add_trigger,
+    update_trigger,
+    remove_trigger,
+    suspend_cycle,
+    activate_cycle,
+    archive_cycle,
+    manual_trigger,
+    evaluate_due_cycles,
+    evaluate_calendar,
+    evaluate_counter,
+    detect_missed_cycles,
+    get_evaluations,
+    CyclesService,
+    CycleCreate,
+    CycleUpdate,
+    TriggerSpec,
+    TriggerType,
+    LaunchMode,
+    DeadlineBehavior,
+    CycleStatus,
+    CycleEvaluation,
+)
+
+__all__ = [
+    "CyclesService",
+    "create_cycle",
+    "update_cycle",
+    "list_cycles",
+    "get_cycle",
+    "add_trigger",
+    "update_trigger",
+    "remove_trigger",
+    "suspend_cycle",
+    "activate_cycle",
+    "archive_cycle",
+    "manual_trigger",
+    "evaluate_due_cycles",
+    "evaluate_calendar",
+    "evaluate_counter",
+    "detect_missed_cycles",
+    "get_evaluations",
+    "CycleCreate",
+    "CycleUpdate",
+    "TriggerSpec",
+    "TriggerType",
+    "LaunchMode",
+    "DeadlineBehavior",
+    "CycleStatus",
+    "CycleEvaluation",
+]
