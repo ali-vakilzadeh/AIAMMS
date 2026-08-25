@@ -1,56 +1,60 @@
 ```
-# Python
+# JSON files (likely build artifacts or cached data)
+*.json
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment
+# Environment files
 .env
 .env.local
 *.env.*
 
-# Dependencies
-.venv/
-venv/
-node_modules/
+# Logs
+*.log
 
-# Build artifacts
-dist/
-build/
-target/
+# Temporary files
+*.tmp
+*.temp
+*~
 
-# Coverage
-.coverage
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Coverage reports
 coverage/
 htmlcov/
+.coverage
 
-# Editors
+# IDE specific
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
-.DS_Store
-Thumbs.db
+# Build outputs
+dist/
+build/
+target/
+out/
 
-# MyPy
-.mypy_cache/
+# Dependencies
+node_modules/
+venv/
+.venv/
+.env/
 
-# Pytest
-.pytest_cache/
-
-# Compiled
-*.o
-*.obj
-*.so
-*.a
-*.dll
-*.exe
-*.out
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
 ```
