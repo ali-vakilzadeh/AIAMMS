@@ -604,7 +604,3 @@ Health readiness gates the load balancer; `/health/ready` returns OK only when `
 Every MVP capability in `architecture.txt` maps to exactly one owning module: auth §5→`AUTH`; orgs/tiers/payments/invitations §6→`TENANCY`; hierarchy/counters/QR/safety §7–8,10→`ASSETS`; cycles §9→`CYCLES`; templates/work orders §11→`TEMPLATES`+`WORKORDERS`; tickets §12→`TICKETS`; notifications §13→`NOTIFY`; reporting §14,23→`REPORTS`; files §15→`FILES`+`STORAGE`; API §17→`API`+owning modules; background §18→`WORKER`; AI §19→`AI`; audit §20→`AUDIT`; security §21→`API`/`AUTH`/`CACHE` middleware; frontend concerns §22 live on the **separate UI server** and are out of scope here; MCP §25→`MCP`; observability §26→`OBSERVABILITY`.
 
 The MVP scope boundaries (exclusions: offline mode, IoT, vision AI, inventory, SSO/MFA, seasonal cycles, etc., baseline §29) are inherited unchanged — and thanks to the module system, each future capability is a **new module or a new adapter**, not a rewrite.
-
----
-
-If you'd like, I can follow this up with (a) the concrete Python `core` kernel skeleton code, (b) per-module OpenAPI route tables, or (c) the Docker Compose + nginx routing configuration for the four processes.
