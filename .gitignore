@@ -24,11 +24,33 @@ dist/
 build/
 target/
 
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
 # Editors
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
+
+# MyPy
+.mypy_cache/
+
+# Pytest
+.pytest_cache/
+
+# Compiled
+*.o
+*.obj
+*.so
+*.a
+*.dll
+*.exe
+*.out
 ```
