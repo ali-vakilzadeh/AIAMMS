@@ -1,0 +1,111 @@
+"""
+WORKORDERS Module - Execution Engine for Maintenance Work Orders
+
+Exports the WorkOrdersModule class and all service functions.
+"""
+
+from .service import (
+    WorkOrdersModule,
+    # Enums
+    WorkOrderStatus,
+    ItemStatus,
+    TriggerSource,
+    MeasurementType,
+    # Data models
+    MeasurementFieldSpec,
+    WorkItemSnapshot,
+    WorkOrderCreate,
+    WorkOrderView,
+    WorkOrderDetail,
+    AcknowledgeRequest,
+    RejectRequest,
+    SnoozeRequest,
+    ResumeRequest,
+    ItemUpdate,
+    MeasurementRecord,
+    CommentCreate,
+    SignatureCreate,
+    CompleteRequest,
+    CloseRequest,
+    # Service functions
+    generate_from_cycle,
+    list_work_orders,
+    get_work_order,
+    acknowledge,
+    reject,
+    snooze,
+    resume,
+    update_item,
+    record_measurement,
+    add_comment,
+    attach_file,
+    sign,
+    complete,
+    close_wo,
+    recompute_completion,
+    # Worker tasks
+    resume_snoozed_task,
+    flag_overdue_task,
+    # SQLAlchemy models
+    WorkOrder,
+    WorkOrderItem,
+    WorkOrderItemMeasurement,
+    WorkOrderComment,
+    WorkOrderAttachment,
+    WorkOrderSignature,
+    SnoozeRecord,
+    RejectionRecord,
+)
+
+__all__ = [
+    "WorkOrdersModule",
+    # Enums
+    "WorkOrderStatus",
+    "ItemStatus",
+    "TriggerSource",
+    "MeasurementType",
+    # Data models
+    "MeasurementFieldSpec",
+    "WorkItemSnapshot",
+    "WorkOrderCreate",
+    "WorkOrderView",
+    "WorkOrderDetail",
+    "AcknowledgeRequest",
+    "RejectRequest",
+    "SnoozeRequest",
+    "ResumeRequest",
+    "ItemUpdate",
+    "MeasurementRecord",
+    "CommentCreate",
+    "SignatureCreate",
+    "CompleteRequest",
+    "CloseRequest",
+    # Service functions
+    "generate_from_cycle",
+    "list_work_orders",
+    "get_work_order",
+    "acknowledge",
+    "reject",
+    "snooze",
+    "resume",
+    "update_item",
+    "record_measurement",
+    "add_comment",
+    "attach_file",
+    "sign",
+    "complete",
+    "close_wo",
+    "recompute_completion",
+    # Worker tasks
+    "resume_snoozed_task",
+    "flag_overdue_task",
+    # SQLAlchemy models
+    "WorkOrder",
+    "WorkOrderItem",
+    "WorkOrderItemMeasurement",
+    "WorkOrderComment",
+    "WorkOrderAttachment",
+    "WorkOrderSignature",
+    "SnoozeRecord",
+    "RejectionRecord",
+]
