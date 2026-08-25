@@ -223,16 +223,4 @@ Platform-level administrator with capabilities to:
 - Secure, time-limited token via email
 - Minimum complexity: 8 characters, 1 uppercase, 1 number
 
----
 
-## 📄 License
-
-Open-source project. License details to be determined.
-
----
-
-## 📝 Notes
-
-This README is generated from the Master Project Specification (`docs/project_specification.md`) and Consolidated Requirements (`docs/requirements.md`). For detailed implementation specifications, refer to those documents.
-
-**Project Status**: ⏳ Planning Phase — Development milestones and completion progress will be tracked and reported as the project advances.
