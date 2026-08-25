@@ -1,14 +1,16 @@
-# Open-Source CMMS SaaS
+Tribute to OpenSource Community
 
-## 📋 Project Status: **Planning Phase**
+# Open-Source CMMS SaaS + AI copilot + MCP accessibility project
 
-This project is currently in the **planning phase**. Completion progress will be reported accordingly as development milestones are achieved.
+## 📋 Project Status: **Active Development Phase** (with vibe coding)
+
+This project is currently in the **development phase**. Completion progress will be reported accordingly as development milestones are achieved.
 
 ---
 
 ## 🎯 Project Overview
 
-An open-source **Computerized Maintenance Management System (CMMS)** delivered as a web-based SaaS platform. The system enables organizations to manage maintenance operations, asset hierarchies, work orders, and repair tickets with strict multi-tenancy and data isolation.
+An open-source **Computerized Maintenance Management System (CMMS)** delivered as a web-based SaaS platform. The system enables organizations to manage maintenance operations, asset hierarchies, work orders, and repair tickets with strict multi-tenancy and data isolation. The project is intrinsically integrated with an AI agent to provide / suggest maintenance schedules. Also the system is fully accessible through MCP to be operated via external AI.
 
 ### Target Platforms
 - Web browser (Desktop, Mobile, Tablet)
