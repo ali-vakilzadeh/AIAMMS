@@ -122,3 +122,14 @@ def get_registry() -> ServiceRegistry:
     if _registry_instance is None:
         _registry_instance = ServiceRegistry()
     return _registry_instance
+
+
+# Module-level convenience functions
+def register_service(name: str, port: Any, interface: type) -> None:
+    """Register a service in the global registry."""
+    get_registry().register_service(name, port, interface)
+
+
+def get_service(name: str, interface: type) -> Any:
+    """Get a service from the global registry."""
+    return get_registry().get_service(name, interface)
