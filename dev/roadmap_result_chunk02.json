@@ -1,0 +1,323 @@
+{
+    "chunk": 2,
+    "name": "Infrastructure Layer - DB, Cache, Storage, Email",
+    "wave": 1,
+    "status": "completed",
+    "modules_implemented": ["db", "cache", "storage", "email"],
+    "comparison_with_roadmap": {
+        "roadmap_requirements": "Implement four infrastructure modules at /src/server/modules/{db,cache,storage,email}/",
+        "implementation_status": "All four modules are present and implement the ModuleBase protocol"
+    },
+    "files_created": [
+        {
+            "path": "/src/server/modules/db/__init__.py",
+            "purpose": "DB module public API exports",
+            "result": "built",
+            "exports": ["build_engine", "session_factory", "org_scoped_session", "ensure_extensions", "run_migrations", "transaction", "register_models", "health_check", "DatabaseService"]
+        },
+        {
+            "path": "/src/server/modules/db/service.py",
+            "purpose": "PostgreSQL access with RLS, migrations, and health reporting",
+            "result": "built",
+            "classes": ["DBSettings", "DatabaseService", "DBModule"],
+            "functions": {
+                "build_engine": {
+                    "signature": "build_engine() -> AsyncEngine",
+                    "inputs": {},
+                    "outputs": "SQLAlchemy AsyncEngine",
+                    "conditions": ["Creates async engine from CMMS_DB__URL", "Configures POOL_SIZE, MAX_OVERFLOW, POOL_TIMEOUT", "Called once at initialize()"]
+                },
+                "session_factory": {
+                    "signature": "session_factory() -> async_sessionmaker[AsyncSession]",
+                    "inputs": {},
+                    "outputs": "Session factory",
+                    "conditions": ["Raw platform-level sessions for auth/platform tables before org context exists"]
+                },
+                "org_scoped_session": {
+                    "signature": "org_scoped_session(org_id: UUID) -> AsyncContextManager[AsyncSession]",
+                    "inputs": {"org_id": "Tenant organization ID"},
+                    "outputs": "Async context manager yielding session",
+                    "conditions": ["Executes SET LOCAL app.organization_id = :org for PostgreSQL RLS", "All domain modules MUST use this", "Raises ValueError if org_id missing"]
+                },
+                "ensure_extensions": {
+                    "signature": "async ensure_extensions() -> None",
+                    "inputs": {},
+                    "outputs": "None",
+                    "conditions": ["Creates vector, pgcrypto, citext extensions"]
+                },
+                "run_migrations": {
+                    "signature": "async run_migrations(revision: str = 'head') -> None",
+                    "inputs": {"revision": "Alembic target revision"},
+                    "outputs": "None",
+                    "conditions": ["Programmatic alembic upgrade", "Migrations live in migrations/ stamped per owning module"]
+                },
+                "transaction": {
+                    "signature": "transaction(session: AsyncSession) -> AsyncContextManager[None]",
+                    "inputs": {"session": "Active session"},
+                    "outputs": "Context manager",
+                    "conditions": ["Commit on success, rollback on exception, always close", "Standardizes unit-of-work"]
+                },
+                "register_models": {
+                    "signature": "register_models(module_name: str, base: DeclarativeBase) -> None",
+                    "inputs": {"module_name": "Owning module name", "base": "Module's model classes"},
+                    "outputs": "None",
+                    "conditions": ["Collect models for migration autogeneration", "Enforce every tenant table has organization_id column"]
+                },
+                "health_check": {
+                    "signature": "async health_check() -> HealthReport",
+                    "inputs": {},
+                    "outputs": "HealthReport",
+                    "conditions": ["SELECT 1 probe", "Report pool checkedout/size saturation", "DEGRADED >80%, UNAVAILABLE on connection failure"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/modules/cache/__init__.py",
+            "purpose": "Cache module public API exports",
+            "result": "built",
+            "exports": ["connect", "allow", "lock", "delay_schedule", "delay_due", "kv_get", "kv_set", "kv_delete", "broker_url", "health_check", "RateDecision", "DelayedJob", "CacheService"]
+        },
+        {
+            "path": "/src/server/modules/cache/service.py",
+            "purpose": "Redis services for rate limiting, locks, delayed queues, KV cache",
+            "result": "built",
+            "classes": ["RateDecision", "DelayedJob", "CacheService", "CacheModule"],
+            "functions": {
+                "connect": {
+                    "signature": "async connect() -> Redis",
+                    "inputs": {},
+                    "outputs": "Async Redis client",
+                    "conditions": ["Connect using CMMS_CACHE__URL with retry", "Connection pool configured"]
+                },
+                "allow": {
+                    "signature": "async allow(key: str, limit: int, window_s: int) -> RateDecision",
+                    "inputs": {"key": "e.g. 'rl:user:{id}:ai'", "limit": "Max calls", "window_s": "Window seconds"},
+                    "outputs": "RateDecision{allowed, remaining, reset_at}",
+                    "conditions": ["Sliding-window rate limit using sorted set", "Consumed by API middleware, AI and MCP limits"]
+                },
+                "lock": {
+                    "signature": "lock(name: str, ttl_s: int, wait_ms: int = 0) -> AsyncContextManager[bool]",
+                    "inputs": {"name": "Lock name", "ttl_s": "Auto-release TTL", "wait_ms": "Optional wait time"},
+                    "outputs": "Context manager with acquired bool",
+                    "conditions": ["SET NX PX with Lua compare-and-delete for safe release", "Used for cycle idempotency and MCP batch ops"]
+                },
+                "delay_schedule": {
+                    "signature": "async delay_schedule(task_name: str, payload: dict, run_at: datetime) -> str",
+                    "inputs": {"task_name": "Worker task", "payload": "Args", "run_at": "UTC datetime"},
+                    "outputs": "job_id",
+                    "conditions": ["ZADD score=timestamp", "Powers snooze expiration and scheduled reminders"]
+                },
+                "delay_due": {
+                    "signature": "async delay_due(now: datetime) -> list[DelayedJob]",
+                    "inputs": {"now": "UTC datetime"},
+                    "outputs": "List of DelayedJob{job_id, task_name, payload}",
+                    "conditions": ["Atomically pop all entries with score <= now via ZPOPMIN", "Called by beat task which dispatches to WORKER"]
+                },
+                "kv_get/kv_set/kv_delete": {
+                    "signature": "async kv_get(key) -> str|None; kv_set(key, value, ttl_s); kv_delete(key)",
+                    "inputs": {"key": "String key", "value": "String value", "ttl_s": "Optional expiry"},
+                    "outputs": "Stored value or None",
+                    "conditions": ["Short-lived cache storage", "Used for token revocation, rate limit state"]
+                },
+                "broker_url": {
+                    "signature": "broker_url() -> str",
+                    "inputs": {},
+                    "outputs": "Redis URL string",
+                    "conditions": ["Returns Redis URL for Celery broker configuration"]
+                },
+                "health_check": {
+                    "signature": "async health_check() -> HealthReport",
+                    "inputs": {},
+                    "outputs": "HealthReport",
+                    "conditions": ["PING probe + latency measurement + memory usage", "DEGRADED if latency >100ms"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/modules/storage/__init__.py",
+            "purpose": "Storage module public API exports",
+            "result": "built",
+            "exports": ["backend", "tenant_key", "put", "get", "delete", "exists", "presigned_url", "sniff_mime", "health_check", "StorageService"]
+        },
+        {
+            "path": "/src/server/modules/storage/service.py",
+            "purpose": "Object storage abstraction with local, MinIO, S3 adapters",
+            "result": "built",
+            "classes": ["StorageBackend", "LocalBackend", "S3Backend", "StorageService", "StorageModule"],
+            "functions": {
+                "backend": {
+                    "signature": "backend() -> StorageBackend",
+                    "inputs": {},
+                    "outputs": "Configured StorageBackend instance",
+                    "conditions": ["Select adapter by CMMS_STORAGE__BACKEND (local|minio|s3)"]
+                },
+                "tenant_key": {
+                    "signature": "tenant_key(org_id: UUID, category: str, *parts) -> str",
+                    "inputs": {"org_id": "Organization ID", "category": "Category like attachments/manuals", "*parts": "Additional path components"},
+                    "outputs": "Normalized storage key",
+                    "conditions": ["Builds '/org-{org_id}/{category}/...' paths", "Rejects '..' and absolute segments"]
+                },
+                "put": {
+                    "signature": "async put(key, stream, mime, max_bytes) -> int",
+                    "inputs": {"key": "Storage key", "stream": "Binary stream", "mime": "MIME type", "max_bytes": "Max size limit"},
+                    "outputs": "Bytes written",
+                    "conditions": ["Streaming upload with SIZE_EXCEEDED abort"]
+                },
+                "get": {
+                    "signature": "async get(key) -> AsyncIterator[bytes]",
+                    "inputs": {"key": "Storage key"},
+                    "outputs": "File chunks iterator",
+                    "conditions": ["Streaming download"]
+                },
+                "delete": {
+                    "signature": "async delete(key) -> None",
+                    "inputs": {"key": "Storage key"},
+                    "outputs": "None",
+                    "conditions": ["Idempotent delete"]
+                },
+                "exists": {
+                    "signature": "async exists(key) -> bool",
+                    "inputs": {"key": "Storage key"},
+                    "outputs": "True if exists",
+                    "conditions": ["Head object check"]
+                },
+                "presigned_url": {
+                    "signature": "async presigned_url(key, ttl_s=900, method='GET') -> str",
+                    "inputs": {"key": "Storage key", "ttl_s": "Validity seconds", "method": "HTTP method"},
+                    "outputs": "Presigned URL string",
+                    "conditions": ["Max 1h TTL cap enforced"]
+                },
+                "sniff_mime": {
+                    "signature": "sniff_mime(head: bytes) -> str",
+                    "inputs": {"head": "First bytes of file"},
+                    "outputs": "MIME type string",
+                    "conditions": ["Uses python-magic", "Falls back to application/octet-stream"]
+                },
+                "health_check": {
+                    "signature": "async health_check() -> HealthReport",
+                    "inputs": {},
+                    "outputs": "HealthReport",
+                    "conditions": ["Write-read-delete probe", "UNAVAILABLE on failure"]
+                }
+            }
+        },
+        {
+            "path": "/src/server/modules/email/__init__.py",
+            "purpose": "Email module public API exports",
+            "result": "built",
+            "exports": ["provider", "render", "send", "send_template", "health_check", "RenderedEmail", "EmailService"]
+        },
+        {
+            "path": "/src/server/modules/email/service.py",
+            "purpose": "Transactional email with SMTP and API provider adapters",
+            "result": "built",
+            "classes": ["RenderedEmail", "EmailProvider", "SMTPProvider", "APIProvider", "EmailService", "EmailModule"],
+            "templates_defined": ["verify_email", "password_reset", "invitation"],
+            "functions": {
+                "provider": {
+                    "signature": "provider() -> EmailProvider",
+                    "inputs": {},
+                    "outputs": "Configured EmailProvider instance",
+                    "conditions": ["Select adapter by CMMS_EMAIL__PROVIDER (smtp|api)"]
+                },
+                "render": {
+                    "signature": "render(template, vars) -> RenderedEmail",
+                    "inputs": {"template": "Template name", "vars": "Template variables"},
+                    "outputs": "RenderedEmail{subject, html, text}",
+                    "conditions": ["Supports verify_email|password_reset|invitation templates"]
+                },
+                "send": {
+                    "signature": "async send(to, subject, html, text) -> bool",
+                    "inputs": {"to": "Recipient email", "subject": "Email subject", "html": "HTML body", "text": "Plain text body"},
+                    "outputs": "True if sent successfully",
+                    "conditions": ["3 retries exponential backoff", "Redact addresses except domain"]
+                },
+                "send_template": {
+                    "signature": "async send_template(template, to, vars) -> bool",
+                    "inputs": {"template": "Template name", "to": "Recipient email", "vars": "Template variables"},
+                    "outputs": "True if sent successfully",
+                    "conditions": ["Main entrypoint for templated emails"]
+                },
+                "health_check": {
+                    "signature": "async health_check() -> HealthReport",
+                    "inputs": {},
+                    "outputs": "HealthReport",
+                    "conditions": ["Provider handshake test"]
+                }
+            }
+        }
+    ],
+    "notes": {
+        "chunk_1_status": {
+            "summary": "Chunk 1 (Core Kernel & Module System) is COMPLETE and committed",
+            "modules": ["core", "shared"],
+            "files_verified": [
+                "/workspace/src/server/core/__init__.py",
+                "/workspace/src/server/core/module_base.py",
+                "/workspace/src/server/core/registry.py",
+                "/workspace/src/server/core/event_bus.py",
+                "/workspace/src/server/core/settings.py",
+                "/workspace/src/server/core/dependency.py",
+                "/workspace/src/server/core/discovery.py",
+                "/workspace/src/server/core/boot.py",
+                "/workspace/src/server/core/health.py",
+                "/workspace/src/server/core/supervisor.py",
+                "/workspace/src/server/core/utils.py",
+                "/workspace/src/server/core/logger.py",
+                "/workspace/src/server/core/feature_flags.py",
+                "/workspace/src/server/shared/types.py",
+                "/workspace/src/server/shared/events_catalog.py"
+            ],
+            "all_core_functions_implemented": true,
+            "matches_roadmap_spec": true
+        },
+        "chunk_2_status": {
+            "summary": "Chunk 2 (Infrastructure Layer) is COMPLETE and committed",
+            "modules": ["db", "cache", "storage", "email"],
+            "files_verified": [
+                "/workspace/src/server/modules/db/__init__.py",
+                "/workspace/src/server/modules/db/service.py",
+                "/workspace/src/server/modules/cache/__init__.py",
+                "/workspace/src/server/modules/cache/service.py",
+                "/workspace/src/server/modules/storage/__init__.py",
+                "/workspace/src/server/modules/storage/service.py",
+                "/workspace/src/server/modules/email/__init__.py",
+                "/workspace/src/server/modules/email/service.py"
+            ],
+            "all_infra_modules_implemented": true,
+            "matches_roadmap_spec": true
+        },
+        "missing_from_chunk_2": {
+            "api_module": "NOT YET IMPLEMENTED - Planned for Chunk 3",
+            "worker_module": "NOT YET IMPLEMENTED - Planned for Chunk 3"
+        },
+        "implementation_quality": {
+            "module_base_protocol": "All modules properly extend ModuleBase with configure/initialize/start/stop/health methods",
+            "service_ports": "All modules expose typed service ports via register_service/get_service pattern",
+            "health_reporting": "All modules implement health_check() returning HealthReport with status OK/DEGRADED/UNAVAILABLE",
+            "settings_validation": "All modules use pydantic Settings loaded from CMMS_<MODULE>__<KEY> env vars",
+            "structured_logging": "All modules use get_logger(name) for namespaced JSON logging"
+        },
+        "roadmap_alignment": {
+            "chunk_1_wave": 0,
+            "chunk_2_wave": 1,
+            "chunk_3_wave": 1,
+            "chunks_completed": [1, 2],
+            "next_chunk_to_implement": 3,
+            "next_modules": ["api", "worker"]
+        }
+    },
+    "verification_summary": {
+        "chunk_1_complete": true,
+        "chunk_2_complete": true,
+        "total_modules_in_repo": 6,
+        "modules_by_wave": {
+            "wave_0": ["core"],
+            "wave_1": ["db", "cache", "storage", "email"],
+            "wave_2_pending": ["auth", "tenancy"],
+            "wave_3_pending": ["assets"]
+        },
+        "ready_for_merge_to_main": true,
+        "recommendation": "Chunks 1 and 2 are fully implemented according to the roadmap specification. The codebase has a working microkernel that can discover, validate, boot, and supervise modules. All four infrastructure adapters (DB, Cache, Storage, Email) implement the ModuleBase protocol with proper health reporting. Ready to proceed with Chunk 3 (API Surface & Worker Engine)."
+    }
+}
