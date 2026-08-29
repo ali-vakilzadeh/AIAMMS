@@ -1,0 +1,254 @@
+```json
+{
+  "_how_to_use": "Save this file as `cmms_ui_roadmap.json`. To start, tell the coder: 'Read cmms_ui_roadmap.json. Execute Piece 1. Follow the master_instructions and use the key_details for this piece.' For subsequent days, say: 'Read cmms_ui_roadmap.json. Execute Piece [X].'",
+  
+  "master_instructions": {
+    "context": "You are building the Web UI for an Open-Source CMMS SaaS. This is a persistent workspace application (IDE-style), not a traditional multi-page website. It features an asset-centric left tree, a tabbed workspace, a global AI side-band, and RTL/LTR support.",
+    "execution_rules": [
+      "Pacing: Complete exactly 1 work piece per session. Do not write code for future pieces.",
+      "Focus: Focus ONLY on the files and logic required for the specific piece requested.",
+      "Output Format: Provide exact file paths and complete, production-ready TypeScript/React code. Skip lengthy explanations.",
+      "State Tracking: At the end of every response, output exactly: [Completed: Piece X] | [Next: Piece Y]",
+      "No Hallucinations: Use the exact library versions specified. Use TypeScript strictly. Follow the folder structure."
+    ],
+    "tech_stack": {
+      "framework": "React 18 + TypeScript + Vite 5",
+      "styling": "Tailwind CSS 3.x (MUST use logical properties like ms-4, pe-2 for RTL/LTR)",
+      "server_state": "TanStack React Query 5",
+      "ui_state": "Zustand 4",
+      "http_client": "Axios 1.x",
+      "forms": "React Hook Form 7 + Zod 3",
+      "routing": "TanStack Router 1.x (for auth pages only, workspace uses tabs)",
+      "qr_scanner": "html5-qrcode 2.x",
+      "charts": "Recharts 2.x",
+      "tables": "TanStack Table 8.x",
+      "icons": "Lucide React"
+    },
+    "folder_structure": [
+      "src/api/ (client.ts, endpoints/, hooks/, types/)",
+      "src/stores/ (Zustand stores for UI state)",
+      "src/auth/ (AuthProvider, RequireAuth, RequireRole, tokenManager)",
+      "src/layout/ (AppShell, Header, TabBar, TabContent, AssetTreeBand, AISideBand)",
+      "src/pages/ (Grouped by domain: auth, dashboard, zones, systems, nodes, workorders, templates, cycles, tickets, reports, settings, notifications, audit)",
+      "src/components/ui/ (Primitive design system)",
+      "src/components/domain/ (Composite domain components)",
+      "src/lib/ (constants, permissions, cn, formatters, validators)",
+      "src/styles/ (globals.css)"
+    ]
+  },
+
+  "pieces": [
+    {
+      "id": 1,
+      "title": "Foundation & Tooling",
+      "description": "Initialize the project, configure build tools, setup Tailwind for RTL/LTR, and create the base folder structure.",
+      "prompt": "Execute Piece 1: Foundation & Tooling. Initialize Vite + React 18 + TypeScript. Configure Tailwind CSS with logical properties for RTL/LTR. Setup ESLint, Prettier, and absolute path aliases (@/). Create the base folder structure.",
+      "files_to_create": [
+        "package.json", "vite.config.ts", "tailwind.config.js", "tsconfig.json", 
+        "index.html", "src/main.tsx", "src/App.tsx", "src/vite-env.d.ts", 
+        ".eslintrc.cjs", ".prettierrc", "src/styles/globals.css"
+      ],
+      "key_details": {
+        "vite_config": { "alias": "@/": "./src", "build_target": "es2020" },
+        "tailwind_config": { "content": ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"] },
+        "base_css_variables": [
+          "--header-height: 3.5rem", "--tab-bar-height: 2.5rem", 
+          "--tree-band-width: 18rem", "--tree-band-collapsed-width: 3rem",
+          "--ai-band-width: 24rem", "--ai-band-expanded-width: 50vw"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "title": "Design System & Core Utilities",
+      "description": "Build primitive UI components, define CSS color tokens, and setup core utility libraries.",
+      "prompt": "Execute Piece 2: Design System & Core Utilities. Define CSS variables for status/safety/priority colors. Build core primitives: Button, Input, SecureInput, Card, Badge, Modal. Implement lib/cn.ts, lib/constants.ts (roles, statuses), and lib/permissions.ts.",
+      "files_to_create": [
+        "src/components/ui/Button.tsx", "src/components/ui/Input.tsx", "src/components/ui/SecureInput.tsx",
+        "src/components/ui/Card.tsx", "src/components/ui/Badge.tsx", "src/components/ui/Modal.tsx",
+        "src/lib/cn.ts", "src/lib/constants.ts", "src/lib/permissions.ts", "src/lib/validators.ts"
+      ],
+      "key_details": {
+        "css_colors": {
+          "status": ["active: #22c55e", "inactive: #9ca3af", "warning: #f59e0b", "critical: #ef4444"],
+          "safety_flags": ["hot_inspect: #f97316", "pause: #eab308", "stop: #dc2626"],
+          "priority": ["low: #6b7280", "medium: #3b82f6", "high: #f59e0b", "critical: #dc2626"]
+        },
+        "roles_enum": ["SYS_ADMIN", "MANAGER", "REPORTER", "OPERATOR", "MAINTENANCE"],
+        "password_zod_schema": "min 8 chars, 1 uppercase, 1 number"
+      }
+    },
+    {
+      "id": 3,
+      "title": "API Client & Auth Subsystem",
+      "description": "Setup Axios with JWT interceptors, in-memory token management, and RBAC context providers.",
+      "prompt": "Execute Piece 3: API Client & Auth Subsystem. Setup Axios client with request/response interceptors (JWT injection, 401 refresh logic). Implement auth/tokenManager.ts (in-memory access token). Build AuthProvider, RequireAuth, and RequireRole components.",
+      "files_to_create": [
+        "src/api/client.ts", "src/auth/tokenManager.ts", "src/auth/AuthProvider.tsx", 
+        "src/auth/RequireAuth.tsx", "src/auth/RequireRole.tsx", "src/auth/useAuthContext.ts"
+      ],
+      "key_details": {
+        "axios_interceptors": {
+          "request": "Attach Bearer token from tokenManager",
+          "response_401": "Call POST /auth/refresh, update tokenManager, retry original request"
+        },
+        "token_manager": "Access token lives ONLY in memory (never localStorage). Refresh token is HttpOnly cookie managed by server.",
+        "auth_context_interface": "{ user, role, isAuthenticated, isLoading, login, logout }"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Auth Pages & Layout Shell",
+      "description": "Build authentication pages and the main persistent application shell (Header, Workspace).",
+      "prompt": "Execute Piece 4: Auth Pages & Layout Shell. Build LoginPage, SignupPage, ForgotPasswordPage, ResetPasswordPage. Build the AppShell layout: Header (with RTL toggle, Bell, User Menu) and WorkspaceArea. Implement useLayoutStore (Zustand) for RTL/LTR and sidebar states.",
+      "files_to_create": [
+        "src/pages/auth/LoginPage.tsx", "src/pages/auth/SignupPage.tsx", "src/pages/auth/ForgotPasswordPage.tsx", "src/pages/auth/ResetPasswordPage.tsx",
+        "src/layout/AppShell.tsx", "src/layout/Header.tsx", "src/layout/WorkspaceArea.tsx",
+        "src/stores/useLayoutStore.ts"
+      ],
+      "key_details": {
+        "appshell_layout": "Flex column, h-screen. Header (fixed top), then flex row containing WorkspaceArea.",
+        "rtl_logic": "Toggle dir attribute on <html>. Persist in useLayoutStore and localStorage.",
+        "header_elements": "Logo, Global Search placeholder, RTL Toggle, Notification Bell (badge), User Avatar Dropdown"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Tab Workspace System",
+      "description": "Implement the Firefox-style tab system for the main workspace.",
+      "prompt": "Execute Piece 5: Tab Workspace System. Implement useTabStore (Zustand) with deduplication logic. Build TabBar (Firefox-style tabs) and TabContent router. Wire up the initial 'Dashboard' and 'Notifications' default tabs.",
+      "files_to_create": [
+        "src/stores/useTabStore.ts", "src/layout/TabBar.tsx", "src/layout/TabContent.tsx"
+      ],
+      "key_details": {
+        "tab_deduplication": "Use keys like 'zone:{id}', 'node:{id}', 'dashboard' (singleton). If dedup key exists, focus existing tab instead of creating new.",
+        "tab_interface": "{ id, type: TabType, title, params, pinned }",
+        "default_tabs_on_login": "Dashboard (active, pinned), Notifications (pinned, background)"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Left Asset Tree Band",
+      "description": "Build the collapsible hierarchical asset tree sidebar.",
+      "prompt": "Execute Piece 6: Left Asset Tree Band. Implement useTreeStore (Zustand). Build AssetTreeBand and recursive AssetTreeNode components. Create mock API hooks for lazy-loading tree levels (Zone -> System -> Node).",
+      "files_to_create": [
+        "src/stores/useTreeStore.ts", "src/layout/AssetTreeBand.tsx", "src/layout/AssetTreeNode.tsx",
+        "src/api/hooks/useAssets.ts"
+      ],
+      "key_details": {
+        "lazy_loading": "Load level by level on expand. L0: Root zones. L1: Child zones/Systems. L2: Sub-systems. L3: Nodes.",
+        "tree_click_action": "Selecting a node updates useTreeStore and calls useTabStore.openTab() for the detail page.",
+        "collapse_behavior": "Collapses to 3rem icon strip. State persisted in useLayoutStore."
+      }
+    },
+    {
+      "id": 7,
+      "title": "Right AI Side-Band",
+      "description": "Build the persistent, collapsible AI assistant panel.",
+      "prompt": "Execute Piece 7: Right AI Side-Band. Implement useAIPanelStore (Zustand). Build AISideBand component (collapsible, context-aware). Create the Chat UI (thread, input, citations) and wire it to the mock /ai/chat endpoint.",
+      "files_to_create": [
+        "src/stores/useAIPanelStore.ts", "src/layout/AISideBand.tsx", "src/api/hooks/useAI.ts",
+        "src/components/domain/AIChatThread.tsx"
+      ],
+      "key_details": {
+        "context_awareness": "When NodeDetailPage mounts, set useAIPanelStore context to { nodeId }. RAG queries are scoped to this node.",
+        "panel_modes": "RAG Chat (default), Checklist Generation (triggered from Template Editor).",
+        "ui_layout": "Collapsible to 3rem strip. Expanded to 24rem. Half-screen mode option."
+      }
+    },
+    {
+      "id": 8,
+      "title": "Dashboard & Asset Detail Pages (Part 1)",
+      "description": "Build the main dashboard and Zone management pages.",
+      "prompt": "Execute Piece 8: Dashboard & Asset Detail Pages (Part 1). Build DashboardPage (KPI cards, Recharts). Build ZoneListPage and ZoneDetailPage (with indicator cards for systems, nodes, attention, tickets, completed workflows, and clone progress).",
+      "files_to_create": [
+        "src/pages/dashboard/DashboardPage.tsx", "src/pages/zones/ZoneListPage.tsx", "src/pages/zones/ZoneDetailPage.tsx",
+        "src/components/domain/KPICard.tsx", "src/components/domain/CloneProgressIndicator.tsx"
+      ],
+      "key_details": {
+        "zone_indicators": "Systems count, Nodes count, Attention required (safety flags), Pending tickets, Completed workflows (day/week).",
+        "zone_clone": "Background job states: PENDING, PROCESSING, COMPLETED, FAILED. Show progress indicator."
+      }
+    },
+    {
+      "id": 9,
+      "title": "Asset Detail Pages (Part 2)",
+      "description": "Build System and Node detail pages with specific status badges and actions.",
+      "prompt": "Execute Piece 9: Asset Detail Pages (Part 2). Build SystemDetailPage (cross-zone engagements, expand system). Build NodeDetailPage (status badges: active/inactive, hours since last action, critical notifications. Buttons: see ticket history, maint history, manuals, view cycles. Tabbed content: Profile/Counters/Manuals/Safety).",
+      "files_to_create": [
+        "src/pages/systems/SystemDetailPage.tsx", "src/pages/nodes/NodeDetailPage.tsx",
+        "src/components/domain/StatusBadge.tsx", "src/components/domain/SafetyFlagBadge.tsx",
+        "src/components/domain/CounterDisplay.tsx", "src/components/ui/FileUploader.tsx", "src/components/ui/SignaturePad.tsx"
+      ],
+      "key_details": {
+        "system_cross_zone": "Auto-lists other zones this system is linked to. 'Switch to zone' button.",
+        "node_badges": "Lifecycle status, Hours since last action, Critical notifications (pulsing if STOP_UNTIL_COMPLETE).",
+        "node_manuals": "FileUploader with 10MB limit, MIME check. 'Mark for AI ingestion' button."
+      }
+    },
+    {
+      "id": 10,
+      "title": "Work Orders & Execution",
+      "description": "Build Work Order list and the detailed execution interface.",
+      "prompt": "Execute Piece 10: Work Orders & Execution. Build WorkOrderListPage (role-based filtering, overdue badges). Build WorkOrderExecutionPage (items, MeasurementInput for NUMERIC/TEXT/BOOLEAN, SignaturePad, Snooze modal with 1h/6h/12h/1d/3d/6d, Complete modal).",
+      "files_to_create": [
+        "src/pages/workorders/WorkOrderListPage.tsx", "src/pages/workorders/WorkOrderExecutionPage.tsx",
+        "src/components/domain/MeasurementInput.tsx", "src/components/domain/SnoozeModal.tsx"
+      ],
+      "key_details": {
+        "role_filtering": "Maintenance sees assigned/pool. Manager/Reporter sees all org WOs.",
+        "snooze_durations": "Exact set: 1h, 6h, 12h, 1d, 3d, 6d. Mandatory reason required.",
+        "measurement_types": "NUMERIC (with min/max thresholds), TEXT, BOOLEAN (Pass/Fail)."
+      }
+    },
+    {
+      "id": 11,
+      "title": "Templates, Cycles & AI Integration",
+      "description": "Build Workflow/Checklist editor, Cycles management, and wire AI generation.",
+      "prompt": "Execute Piece 11: Templates, Cycles & AI Integration. Build TemplateListPage (with 'Launch workflow now' button) and TemplateEditorPage (drag-sort items). Build CyclesPage (reset/pause buttons, trigger config). Wire the 'AI Generate' button in Template Editor to the AI Side-Band.",
+      "files_to_create": [
+        "src/pages/templates/TemplateListPage.tsx", "src/pages/templates/TemplateEditorPage.tsx",
+        "src/pages/cycles/CyclesPage.tsx", "src/components/domain/CycleTriggerConfig.tsx",
+        "src/components/domain/AIDraftPreview.tsx"
+      ],
+      "key_details": {
+        "template_editor": "Drag-sortable list of items. AI Generate button switches AI Side-Band to Checklist Generation mode.",
+        "cycle_triggers": "Multi-select: Calendar/Cron, Operating Hours, Operation Count. First satisfied wins.",
+        "cycle_actions": "Reset cycle timer, Pause/Resume cycle timer."
+      }
+    },
+    {
+      "id": 12,
+      "title": "Tickets, Reports & Admin",
+      "description": "Build Ticketing system, Reports/Exports, and Organization/User settings.",
+      "prompt": "Execute Piece 12: Tickets, Reports & Admin. Build TicketListPage and TicketDetailPage (5-step flow, 3-loop cap warning, manager decision panel). Build ReportsPage (filters, export job flow). Build OrgSettingsPage (team management: create user, change role, remove user with lock validation) and UserProfilePage.",
+      "files_to_create": [
+        "src/pages/tickets/TicketListPage.tsx", "src/pages/tickets/TicketDetailPage.tsx",
+        "src/pages/reports/ReportsPage.tsx", "src/pages/settings/OrgSettingsPage.tsx", "src/pages/settings/UserProfilePage.tsx",
+        "src/components/domain/TicketFeedbackLoop.tsx", "src/components/domain/ExportButton.tsx"
+      ],
+      "key_details": {
+        "ticket_loop_guard": "Visual warning when loop_count >= 2. Auto-escalates after 3 loops.",
+        "manager_decision": "Radio group: FORCE_CLOSE, REQUIRE_NEW_TICKET, MANDATE_ACTION.",
+        "org_team_remove": "Validate no active assignments, open orders, or safety locks before allowing user removal.",
+        "payment_gate": "Show critical alert if org payment is overdue (blocks ticket creation)."
+      }
+    },
+    {
+      "id": 13,
+      "title": "Final Polish & Global Features",
+      "description": "Build Notifications, Audit Log, and Global Search.",
+      "prompt": "Execute Piece 13: Final Polish & Global Features. Build NotificationsPage (deep linking to entities) and AuditLogPage (state diff view). Implement GlobalSearch (Cmd+K modal) accessible from Header.",
+      "files_to_create": [
+        "src/pages/notifications/NotificationsPage.tsx", "src/pages/audit/AuditLogPage.tsx",
+        "src/components/domain/GlobalSearch.tsx", "src/components/domain/StateDiffViewer.tsx"
+      ],
+      "key_details": {
+        "global_search": "Cmd/Ctrl+K shortcut. Searches assets, WOs, tickets by code/name. Results open as tabs.",
+        "notification_deep_link": "Clicking notification parses entity_type and entity_id to call useTabStore.openTab().",
+        "audit_diff": "Modal showing previous state JSON vs new state JSON for audited events."
+      }
+    }
+  ]
+}
+```
