@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS Variables for Design System */
+:root {
+  /* Direction state - toggled via data-dir attribute */
+  --dir: ltr;
+  
+  /* Spacing scale (based on 4px grid) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
+
+  /* Layout dimensions */
+  --header-height: 3.5rem;
+  --sidebar-width: 16rem;
+  --ai-panel-width: 20rem;
+  --tab-bar-height: 2.75rem;
+
+  /* Status colors */
+  --color-status-success: #22c55e;
+  --color-status-warning: #f59e0b;
+  --color-status-error: #ef4444;
+  --color-status-info: #3b82f6;
+
+  /* Safety colors */
+  --color-safety-low: #22c55e;
+  --color-safety-medium: #f59e0b;
+  --color-safety-high: #f97316;
+  --color-safety-critical: #ef4444;
+
+  /* Priority colors */
+  --color-priority-low: #6b7280;
+  --color-priority-medium: #3b82f6;
+  --color-priority-high: #f97316;
+  --color-priority-urgent: #ef4444;
+
+  /* Neutral colors */
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #f9fafb;
+  --color-bg-tertiary: #f3f4f6;
+  --color-border: #e5e7eb;
+  --color-text-primary: #111827;
+  --color-text-secondary: #6b7280;
+  --color-text-muted: #9ca3af;
+
+  /* Interactive colors */
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-active: #1e40af;
+
+  /* Logical spacing variables (updated dynamically for RTL/LTR) */
+  --spacing-inline-start: var(--space-4);
+  --spacing-inline-end: var(--space-4);
+  --margin-inline-start: 0;
+  --margin-inline-end: 0;
+  --padding-inline-start: var(--space-4);
+  --padding-inline-end: var(--space-4);
+}
+
+/* RTL mode overrides */
+[data-dir='rtl'] {
+  --spacing-inline-start: var(--space-4);
+  --spacing-inline-end: var(--space-4);
+}
+
+/* Base styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-primary);
+  direction: var(--dir);
+}
+
+#root {
+  height: 100%;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Utility classes for logical properties */
+.inline-start {
+  margin-inline-start: var(--margin-inline-start);
+  padding-inline-start: var(--padding-inline-start);
+}
+
+.inline-end {
+  margin-inline-end: var(--margin-inline-end);
+  padding-inline-end: var(--padding-inline-end);
+}
