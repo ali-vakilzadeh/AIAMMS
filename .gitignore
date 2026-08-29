@@ -2,97 +2,99 @@
 # Dependencies
 node_modules/
 
-# Build artifacts
-cmms-web-ui/node_modules/
-
-# Environment variables
+# Environment
 .env
 .env.local
 .env.*
 
-# IDE files
-.vscode/
-.idea/
-
 # Logs
 *.log
 
-# Temporary files
-*.tmp
-*.swp
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Coverage reports
+# Coverage
 coverage/
 htmlcov/
+.coverage
 
-# Python cache
+# Build artifacts
+dist/
+build/
+target/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# Venv
+.Python
+env/
 venv/
 .venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git/
+.mypy_cache/
+.pytest_cache/
+.hypothesis/
 
-# Compiled CSS/JS
-*.min.js
-*.min.css
-
-# TypeScript
-*.tsbuildinfo
+# Node
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+node_modules/
+dist/
+build/
 .next/
 .nuxt/
-.vuepress/dist/
-build/
+.vuepress/dist
+/public
+.astro/
+.output/
+.vercel/
+.netlify/
 
-# Rust
-target/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Java
-*.class
-*.jar
-*.war
-*.ear
-*.log
+# OS
+.DS_Store
+Thumbs.db
 
-# Go
-*.o
-*.a
-*.so
-*.out
-
-# .NET
-*.dll
-*.exe
-*.pdb
-bin/
-obj/
-
-# Zip archives
+# Compressed
 *.zip
-*.tar
 *.gz
+*.tar
 *.tgz
-*.rar
+*.bz2
+*.xz
 *.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 
-# Image files (if accidentally added)
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.bmp
-*.svg
-*.ico
-
+# Reports
+*.json
 ```
