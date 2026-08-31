@@ -11,6 +11,18 @@ export enum UserRole {
 }
 
 /**
+ * Role hierarchy levels (higher number = more permissions)
+ */
+export const ROLE_HIERARCHY: Record<UserRole, number> = {
+  [UserRole.ADMIN]: 6,
+  [UserRole.MANAGER]: 5,
+  [UserRole.SUPERVISOR]: 4,
+  [UserRole.TECHNICIAN]: 3,
+  [UserRole.OPERATOR]: 2,
+  [UserRole.VIEWER]: 1,
+};
+
+/**
  * Asset status types
  */
 export enum AssetStatus {

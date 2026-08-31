@@ -1,6 +1,5 @@
-import axios from 'axios';
-import type { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios/index.js';
-import { tokenManager } from '../auth/tokenManager';
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios';
+import { tokenManager, TokenType } from '../auth/tokenManager';
 
 // Base API URL from environment
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
@@ -45,7 +44,7 @@ apiClient.interceptors.response.use(
       
       try {
         // Attempt to refresh the token
-        const newTokens = await tokenManager.refreshTokenAsync();
+        const newTokens = await tokenManager.refreshToken();
         
         if (newTokens && originalRequest.headers) {
           // Retry original request with new token

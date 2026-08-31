@@ -2,8 +2,12 @@
 # Dependencies
 node_modules/
 
-# Build artifacts
-cmms-web-ui/node_modules/
+# Build outputs
+dist/
+build/
+.next/
+.nuxt/
+out/
 
 # Environment variables
 .env
@@ -13,86 +17,12 @@ cmms-web-ui/node_modules/
 # IDE files
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Logs
 *.log
 
 # Temporary files
 *.tmp
-*.swp
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Coverage reports
-coverage/
-htmlcov/
-
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# Venv
-venv/
-.venv/
-
-# Compiled CSS/JS
-*.min.js
-*.min.css
-
-# TypeScript
-*.tsbuildinfo
-.next/
-.nuxt/
-.vuepress/dist/
-build/
-
-# Rust
-target/
-
-# Java
-*.class
-*.jar
-*.war
-*.ear
-*.log
-
-# Go
-*.o
-*.a
-*.so
-*.out
-
-# .NET
-*.dll
-*.exe
-*.pdb
-bin/
-obj/
-
-# Zip archives
-*.zip
-*.tar
-*.gz
-*.tgz
-*.rar
-*.7z
-
-# Image files (if accidentally added)
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.bmp
-*.svg
-*.ico
-
 ```
