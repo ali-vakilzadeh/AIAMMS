@@ -8,6 +8,8 @@ export type BadgeVariant =
   | 'error'
   | 'info'
   | 'neutral'
+  | 'outline'
+  | 'destructive'
   | 'priority-critical'
   | 'priority-high'
   | 'priority-medium'
@@ -28,6 +30,8 @@ const variantStyles: Record<BadgeVariant, string> = {
   error: 'bg-red-100 text-red-800',
   info: 'bg-blue-100 text-blue-800',
   neutral: 'bg-gray-100 text-gray-600',
+  outline: 'border border-gray-300 text-gray-700 bg-transparent',
+  destructive: 'bg-red-600 text-white hover:bg-red-700',
   'priority-critical': 'bg-red-100 text-red-800',
   'priority-high': 'bg-orange-100 text-orange-800',
   'priority-medium': 'bg-yellow-100 text-yellow-800',
