@@ -1,4 +1,4 @@
-// Re-export axios types to work around bundler moduleResolution issues
+// Re-export axios types - using direct module reference for bundler compatibility
 export type {
   AxiosInstance,
   AxiosError,

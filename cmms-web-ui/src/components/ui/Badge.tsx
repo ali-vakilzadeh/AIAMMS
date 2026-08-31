@@ -129,3 +129,24 @@ export function getBadgeVariantFromPriority(
       return 'default';
   }
 }
+
+/**
+ * Helper function to get status color classes for text or background
+ */
+export function getStatusColor(
+  status: string,
+  type: 'text' | 'bg' = 'text'
+): string {
+  const normalizedStatus = status.toLowerCase();
+  
+  const statusColors: Record<string, { text: string; bg: string }> = {
+    operational: { text: 'text-green-600', bg: 'bg-green-500' },
+    warning: { text: 'text-yellow-600', bg: 'bg-yellow-500' },
+    critical: { text: 'text-red-600', bg: 'bg-red-500' },
+    offline: { text: 'text-gray-600', bg: 'bg-gray-500' },
+    maintenance: { text: 'text-blue-600', bg: 'bg-blue-500' },
+  };
+  
+  const colors = statusColors[normalizedStatus] || { text: 'text-gray-600', bg: 'bg-gray-500' };
+  return colors[type];
+}
