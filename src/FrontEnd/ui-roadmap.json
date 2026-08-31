@@ -1,4 +1,3 @@
-```json
 {
   "_how_to_use": "Save this file as `cmms_ui_roadmap.json`. To start, tell the coder: 'Read cmms_ui_roadmap.json. Execute Piece 1. Follow the master_instructions and use the key_details for this piece.' For subsequent days, say: 'Read cmms_ui_roadmap.json. Execute Piece [X].'",
   
@@ -251,4 +250,3 @@
     }
   ]
 }
-```
