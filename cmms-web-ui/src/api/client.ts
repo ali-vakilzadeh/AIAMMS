@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios';
+import type { AxiosInstance, AxiosError, AxiosResponse, InternalAxiosRequestConfig } from '../axios-types';
 import { tokenManager } from '../auth/tokenManager';
 
 // Base API URL from environment
