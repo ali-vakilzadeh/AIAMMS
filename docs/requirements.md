@@ -1,565 +1,513 @@
+# PROJECT AIAMMS  
+## AI‑Assisted Maintenance Management System  
+### Open‑Source CMMS Web SaaS  
+#### CONSOLIDATED & EXPANDED REQUIREMENTS – MVP SCOPE  
 
-# OPEN-SOURCE CMMS WEB SAAS
-CONSOLIDATED AND CLEANED REQUIREMENTS - MVP SCOPE (WITH AI PHASE 1 & 2)
+---
 
+## 1. PROJECT PURPOSE & PHILOSOPHY
 
-## 1. PROJECT PURPOSE
+**AIAMMS** is an open‑source Computerized Maintenance Management System (CMMS) delivered as a web‑based SaaS. It enables organizations to manage:
 
+- Users, organizations, and sub‑organizations (multi‑tenant with strict isolation).
+- Hierarchical assets: Zones → Systems → Sub‑systems → Service Points / Nodes.
+- Maintenance & inspection cycles, workflows (including parallel branches and conditional logic), checklists.
+- Work orders, repair tickets, attachments, and inventory (spare parts).
+- Advanced dashboards, scheduled reports, and full audit trails.
+- **AI copilot** capabilities:
+  - AI‑generated checklists and work instructions.
+  - AI‑assisted troubleshooting and repair suggestions via RAG (Retrieval‑Augmented Generation) over ingested manuals.
+  - **AI fills forms and suggests every configurable item** – the human (Manager/Maintenance) **reviews and approves** before activation.
+  - Continuous learning: the system **logs all AI interactions, human corrections, and approvals** to produce high‑quality fine‑tuning datasets for iterative model improvement.
+- MCP (Model Context Protocol) exposure of all system functions for external AI orchestration.
 
-The project is an open-source Computerized Maintenance Management System (CMMS)
-delivered as a web-based SaaS.
-The system shall allow organizations to manage:
-- users and organizations,
-- zones, systems, sub-systems, service points / nodes,
-- maintenance and inspection cycles, workflows, checklists,
-- work orders, repair tickets, attachments,
-- basic reporting dashboards,
-- AI-assisted checklist generation and manual retrieval (RAG).
-The system shall be multi-tenant, with strict data isolation between
-organizations.
+**Core philosophy:**  
+AI is the **copilot** – it accelerates work, reduces errors, and learns from every human decision, but **never overrides** human authority.
+
+---
 
 ## 2. CORE TECHNICAL STACK
 
-Core backend language:
-- Python.
-Database:
-- PostgreSQL (with pgvector extension for AI embeddings).
-Architecture:
-- Server API + web client.
-Server API:
-- REST architecture.
-- JWT-based security.
-Client:
-- Node.js / React web client.
-- The web client shall support bi-directional text entry.
-- The system shall be accessible from mobile and tablet browsers.
-AI & Async Processing:
-- Celery (for background AI processing, cycle evaluation, and report generation).
-- Redis (Celery broker, caching, delayed queues).
-Target platform:
-- Web SaaS.
-- Mobile/tablet internet accessibility is required.
+| Layer               | Technology                                                       |
+|---------------------|------------------------------------------------------------------|
+| Backend language    | Python 3.11+                                                     |
+| API framework       | FastAPI or Django (REST, JWT)                                    |
+| Database            | PostgreSQL 15+ with **pgvector** extension                       |
+| Async processing    | Celery + Redis (broker & cache)                                  |
+| Web client          | React 18+ / Node.js (mobile/tablet‑responsive)                   |
+| File storage        | Server disk + S3‑compatible (MinIO) for attachments & exports    |
+| AI integration      | External LLM API (OpenAI/Anthropic) + local fallback mode        |
+| AI training pipeline| Data collection service + export scripts for fine‑tuning (LoRA / QLoRA) |
+| Deployment          | Docker Compose (dev) + Kubernetes‑ready manifests (prod)         |
+| Migrations          | Alembic                                                          |
+| Monitoring          | Structured JSON logs + health check endpoint + Sentry integration|
 
-## 3. USER ACCOUNTS AND SIGNUP
+---
 
-### 3.1 User Signup
+## 3. USER ACCOUNTS & SIGNUP
 
-The system shall allow new users to sign up.
-Signup requirements:
-- Self-service registration.
-- Email verification is required.
-Post-MVP:
-- SSO / OAuth.
-- 
-- MFA / 2FA.
+### 3.1 Self‑Service Registration
+- Email + password (min 8 chars, 1 uppercase, 1 number).
+- Email verification required (time‑limited token).
+- **Post‑MVP**: SSO/OAuth, MFA/2FA.
+
 ### 3.2 User Profile
--
-Each user shall have a profile.
-Profile shall include:
 - Name, Email, Phone 1, Phone 2, Employee ID, Timezone.
-### 3.3 Organization Membership
+- Profile picture (optional).
 
-A user shall belong to only one organization at a time.
-A user may change organization by accepting a new invitation.
+### 3.3 Organization & Sub‑Organization Membership
+- A user belongs to **one primary organization** at a time.
+- **Sub‑organizations** (nested tenants) are supported in MVP:
+  - Parent org can create child orgs with separate data isolation.
+  - Users can be shared across parent/child via invitation with inherited roles.
+  - Sub‑orgs have their own tier limits (see 4.7) but can be centrally managed.
+
 ### 3.4 User Deactivation
+- Deactivated users: no new assignments, no role changes, historical records remain.
 
-Users can be deactivated.
-Deactivated users:
-- Shall not receive new task assignments.
-- Shall not have their role changed.
-- Historical records shall remain available.
-### 3.5 System Administrator
+### 3.5 System Administrator (Platform Level)
+- Override all limitations, delete users, reset passwords, view all orgs (debug mode).
+- Manage platform‑wide AI model settings and fine‑tuning data exports.
 
-A system administrator role shall exist at platform level.
-System administrator may:
-- Override all limitations, delete users, change passwords.
-- See all records for debugging.
-- Perform platform-level administration.
 ### 3.6 Password Recovery
+- “Forgot Password” flow with secure, time‑limited email token.
 
-The system shall support a "Forgot Password" flow.
-- Users shall receive a secure, time-limited token (via email) to reset passwords.
-- Passwords must meet minimum complexity requirements (e.g., min 8 chars, 1 uppercase, 1 number).
+---
 
-## 4. ORGANIZATION MANAGEMENT
+## 4. ORGANIZATION & SUB‑ORGANIZATION MANAGEMENT
 
 ### 4.1 Organization Creation
+- Any verified user may create an organization (tenant).
 
-Users shall be able to create an organization. Each organization is a separate tenant.
-### 4.2 Data Isolation
+### 4.2 Strict Data Isolation
+- **Row‑Level Security (RLS)** in PostgreSQL ensures no cross‑org data leakage.
 
-There shall be no data sharing between organizations at any rate.
-### 4.3 Sub-Organizations
+### 4.3 Sub‑Organizations (MVP)
+- Hierarchical tenant structure (max depth 3).
+- Parent org can view aggregated reports across sub‑orgs (with permission).
+- Each sub‑org has its own zones, systems, users, and AI training data (isolated by default).
 
-Sub-organizations are a post-MVP feature.
 ### 4.4 Organization Profile
+- Logo, contact info, 2–3 custom K‑V fields.
+- Base address also serves as a “Zone” for default location.
 
-Each organization shall have:
-- Logo, Base contact information, 2 to 3 custom fields (Key-Value).
-The base organization account shall also be treated as a zone for address/contact.
-### 4.5 Zone Address and Contact
--
-Each zone shall have: Address, Contact information.
+### 4.5 Zone Address & Contact
+- Each zone must have address and contact details.
+
 ### 4.6 Invitations
+- Email with secure token (expires in 14 days) for new users.
+- Direct lookup‑and‑add for existing users.
+- Invitations can be scoped to sub‑organizations.
 
-Invitation methods:
-1. Email invitation with secure token for non-existing users.
-2. Direct addition to organization for existing users (type-to-lookup).
-Invitation expiry: Two weeks.
-### 4.7 Subscription / Tier Limits
+### 4.7 Subscription / Tier Limits (Applies to Service Points Only)
+| Tier      | Max Nodes | Sub‑orgs allowed |
+|-----------|-----------|------------------|
+| Free      | 100       | 0                |
+| Pro       | 1,000     | up to 5          |
+| Ultimate  | Unlimited | unlimited        |
 
-Tier limits apply to service points / nodes only:
-- Free tier: up to 100 nodes.
-- Pro tier: up to 1000 nodes.
-- Ultimate tier: unlimited nodes.
-No tier-based limit on structural entities (zones, systems).
 ### 4.8 Overdue Payment Behavior
--
-Overdue organizations shall not be able to send repair tickets. All other features remain active.
+- Overdue orgs **cannot send repair tickets**; all other features (including AI suggestions) remain active.
 
-## 5. ROLE MANAGEMENT
+---
 
-### 5.1 Organization Roles
--
-- Manager, Reporter, Operator, Maintenance.
-### 5.2 Manager Role
--
-Full setup rights (Zones, Systems, Nodes, Cycles, Schedules).
-Can set cycles to launch automatically (1-2x per day/shift) or manually.
-Full ticketing, review, and advanced reporting dashboard access.
+## 5. ROLE MANAGEMENT (Organization & Sub‑Org Level)
 
-### 5.3 Reporter Role
+| Role       | Permissions                                                                                                                                 |
+|------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| **Manager**| Full setup (Zones, Systems, Nodes, Cycles, Workflows, Inventory).<br>Set auto/manual launch modes.<br>Full ticketing & reporting.<br>**Approve AI‑generated checklists/workflows before they go live.**<br>View and edit all AI training logs for their org. |
+| **Reporter**| Access advanced dashboards, scheduled reports, manually advance cycles. Can **suggest edits** to AI outputs (not approve).                    |
+| **Operator**| Issue repair tickets, log counter readings, execute assigned work.<br>**Receive AI‑assisted troubleshooting suggestions** for active tickets. |
+| **Maintenance**| Receive WO/tickets, perform work, submit feedback, reset counters.<br>**Review AI‑generated repair steps** and edit/confirm them before closing a ticket. |
 
-Access advanced reporting dashboard.
-Click existing manual cycles to advance them.
+---
 
-### 5.4 Operator Role
+## 6. ASSET HIERARCHY (INCLUDING SUB‑ORGS)
 
-Issue repair tickets, perform assigned operational inputs.
-Log operating hours / operation counts. Execute assigned work where permitted.
+- **Maximum depth**: 6 levels (`Org → Sub‑Org → Zone → System → Sub‑system → Node`).
+- **Zones**: Flat or 2‑level tree. Status (Active/Inactive/Under construction/Decommissioned), up to 5 custom fields, required address/contact.
+- **Zone cloning**: Full tree + profiles + cycles + workflows + checklists + inventory links.
+- **Systems & Sub‑systems**: Max 2 levels. Systems may span zones.
+- **Classification & Technical Specifications**: Taxonomy support; generic spec fields (post‑MVP: equipment‑specific forms).
+- **Prioritization**: All assets support Priority (Low/Medium/High/Critical).
+- **Barcode / QR Code**: Generate, print, scan (read via mobile camera).
+- **Soft Delete**: Restrict hard deletion. Soft‑delete = Decommissioned/Archived. Parent decommission → children inherit status and become inaccessible for new WOs. **Managers can restore soft‑deleted entities within 30 days** (restoration resets status to Active).
 
-### 5.5 Maintenance Role
+---
 
-Receive repair tickets and work orders. Execute maintenance work.
-Submit reports, submit feedback, reset counters where permitted.
-
-## 6. ASSET HIERARCHY
-
-### 6.1 General Hierarchy
-
-Organization -> Zone -> System -> Sub-system -> Service Point / Node.
-Maximum total hierarchy depth: 6 levels.
-
-### 6.2 Zones
-
-Multiple zones per organization. Flat or tree structure (max 2 breakdown levels).
-Features: Status required, up to 5 custom fields, cloning required, address/contact required.
-Status examples: Active, Inactive, Under construction, Decommissioned.
-
-### 6.3 Zone Cloning
-
-Cloning shall include: Full tree structure, profiles, cycles, workflows, checklists.
-6.4 Geolocation
-
-Post-MVP feature. Only zone may have a geolocation field in its profile page.
-
-### 6.5 Systems
-
-Each zone shall have systems/sub-systems. Systems may span between zones.
-System depth: Maximum 2 levels (System -> Sub-system).
-
-### 6.6 System Classification
-
-Systems shall support taxonomy / classification.
-
-### 6.7 Technical Specifications
-
-Systems / equipment shall include general technical specifications.
-Post-MVP: Different technical forms for each kind of equipment.
-
-### 6.8 Prioritization
-
-Assets and maintenance items shall support prioritization.
-
-### 6.9 Barcode / QR Code
-
-Generate, print, read / scan.
-
-### 6.10 Deletion and Cascade Rules
-
-- Hard deletion of structural entities is restricted.
-- Deletion shall be a "Soft Delete" (Decommissioned/Archived status).
-- If a parent is soft-deleted, all children inherit the status and become inaccessible for new Work Orders.
-
-## 7. SERVICE POINTS / NODES / EQUIPMENT
+## 7. SERVICE POINTS / NODES / EQUIPMENT (MVP WITH INVENTORY)
 
 ### 7.1 Definition
+Atomic maintenance unit; may halt parent structure via safety flags.
 
-Atomic maintenance unit. Independent, but may halt parent structure via safety flags.
+### 7.2 Profile & Relationships
+- Profile, maintenance history, manuals/attachments, assigned cycles, **spare parts list**.
+- Inventory integration (MVP):
+  - **Parts table** (name, SKU, manufacturer, min/max stock, unit cost).
+  - **Node‑Parts relationship** (which parts are used where).
+  - **Work Order‑Parts usage** (consume quantities, track remaining stock).
+  - Low‑stock alerts (configurable thresholds).
 
-### 7.2 Service Point Relationships
+### 7.3 Counters
+- Operation hours, operation count (configurable, may inherit from parent).
+- Maintenance users can reset counters (node only, or recursively).
 
-Profile, maintenance history, manuals/documents, attachments, assigned cycles, spare parts placeholders.
+### 7.4 Attachments
+- Photos, PDF, TXT, DOCX (max 10 MB, MIME validation).
 
-### 7.3 Spare Parts / Parts Relationship
+### 7.5 Lifecycle Status
+- **Active**, **In Maintenance**, **Decommissioned**.
+- WOs/tickets can be created **only for Active** nodes.
 
-1:N relationship to parts / spares. Inventory management is post-MVP.
-Database design shall include connection slots for future inventory integration.
+### 7.6 AI Manual Ingestion (RAG)
+- PDFs attached to nodes are **automatically parsed, chunked, and embedded** into pgvector.
+- Strictly isolated by `organization_id` (and `sub_org_id`).
 
-### 7.4 Counters
+---
 
-Operation hours, operation count. Configurable by user. May inherit from parent.
+## 8. MAINTENANCE & INSPECTION CYCLES (INCLUDING SEASONAL)
 
-### 7.5 Counter Reset
+### 8.1 Scope
+- Zone, System, Sub‑system, Node.
 
-Maintenance user can reset counters (node only, or optionally children). Does not affect unrelated parents.
-
-### 7.6 Attachments
-
-Photos, PDF files, Text files.
-
-### 7.7 Decommissioning
-
-Supported. Decommissioned service points keep historical data available.
-
-### 7.8 Node Lifecycle Status
-
-Service points shall have a lifecycle status: Active, In Maintenance, Decommissioned.
-Work orders and tickets can only be generated for Active nodes.
-
-### 7.9 AI Manual Ingestion (RAG)
-
-PDF manuals attached to nodes shall be automatically parsed, chunked, and embedded into the vector database to enable the RAG Manual Assistant (See Section 25).
-
-## 8. MAINTENANCE AND INSPECTION CYCLES
-
-### 8.1 Assignment Scope
-
-Zone, System, Sub-system, Service point.
-
-### 8.2 Cycle Trigger Types
-
-Number of operations, hours of operation, natural / calendar hours.
+### 8.2 Trigger Types
+- **Number of operations**, **hours of operation**, **calendar (cron)**, **seasonal** (new – e.g., “every winter solstice” or “quarterly based on meteorological seasons” with date ranges).
 
 ### 8.3 Multiple Triggers
+- First satisfied trigger wins.
 
-First satisfied trigger wins and triggers the cycle.
+### 8.4 Grace Period / Deadline
+- After deadline: flag as Critical Stop or wait until completion (manager’s choice).
 
-### 8.4 Cron-Like Expressions
+### 8.5 Missed Calendar Cycles
+- If a calendar cycle passes its deadline without triggering, the **next system evaluation** creates an “Overdue” Work Order immediately.
 
-Supported for calendar-based cycles.
+### 8.6 Cycle Suspension
+- Managers can suspend cycles (no WO generation, calendar pauses).
 
-### 8.5 Manual Logging of Counters
-
-Logged by Operator or Manager.
-
-### 8.6 Grace Period / Deadline
-
-After deadline: Flag critical stop or wait until completed.
-
-### 8.7 Seasonal Cycles
-
-Post-MVP.
-
-### 8.8 Postponement of Overhead Maintenance
-
-Each cycle may be assigned to postpone overhead maintenance.
-
-### 8.9 Missed Calendar Cycles
-
-If a calendar-based cycle passes its deadline without triggering, the system shall generate an "Overdue" Work Order immediately upon the next system evaluation.
-
-### 8.10 Cycle Suspension
-
-Managers can temporarily "Suspend" a cycle. Suspended cycles do not generate Work Orders, and calendar triggers pause until reactivated.
+---
 
 ## 9. CYCLE INHERITANCE
 
-### 9.1 Inheritance Direction
+- **Top‑down** (org → sub‑org → zone → …). Operation hours/counts inherit unless overridden.
+- If flagged “Influence children”, child nodes **cannot override** the cycle.
+- Child cycles **do not influence parents** (except safety flags).
+- Changes to parent cycles apply only to **new instances** – existing WOs are not retroactively changed.
 
-Top to bottom. Applies to operation hours/counts. Does not automatically apply to plans/schedules unless configured.
+---
 
-### 9.2 Influence Child Nodes
-
-If flagged, child nodes cannot override the cycle.
-
-### 9.3 Child Cycle Behavior
-
-Child cycles do not influence parents. Only safety flags can stop parents.
-
-### 9.4 Effect of Parent Changes
-
-Changes apply only to new instances. Existing instances are not retroactively changed.
-
-## 10. WORKFLOWS AND CHECKLISTS
+## 10. WORKFLOWS & CHECKLISTS (WITH PARALLEL BRANCHES & CONDITIONAL LOGIC – MVP)
 
 ### 10.1 Assignment
-
-Each cycle can be assigned a workflow or a checklist.
+- Each cycle can be assigned a workflow (task sequence) or a checklist (inspection).
 
 ### 10.2 Unique Coding
-
-Auto-generated, user-modifiable, must remain unique.
+- Auto‑generated, user‑modifiable, must remain unique per org.
 
 ### 10.3 Searchability
+- Each item (task/inspection step) stored separately and full‑text searchable.
 
-Searchable per each item inside them. Each item stored separately.
+### 10.4 Checklist
+- Inspection only. Result: Inspected, Pass, Fail.
 
-### 10.4 Checklist Definition
+### 10.5 Workflow (MVP Extended)
+- **Task states**: Task, Started, Completed, Failed, Pending, Performed by.
+- **Parallel branches**: Tasks can run concurrently (AND splits/joins).
+- **Conditional logic**: If‑then‑else branches based on measurement values or previous task outcomes (e.g., “If temperature > 80°C, run cooling check branch”).
+- **Versioning**: Workflows are versioned; WOs reference a specific version.
 
-Inspection only. Result type: Inspected, Pass, Fail.
+### 10.6 No Cross‑Org Sharing
+- Workflows/checklists are strictly org‑isolated.
 
-### 10.5 Workflow Definition
+### 10.7 AI Copilot – Checklist & Workflow Generation
+- Manager clicks “AI Generate” in the creator form.
+- **Prompt** (e.g., “Monthly maintenance for 500kVA Diesel Generator”).
+- AI returns **structured suggestions**: activity descriptions, measurement units, min/max thresholds, **recommended parallel groups**, and **conditional rules**.
+- **Human review & approval** is mandatory – the AI output is shown side‑by‑side with an edit form; the manager edits, then clicks “Approve & Save” to create the version.
+- If rejected, the manager provides feedback (stored as training data).
 
-Instruction sets. Task states: Task, Started, Completed, Failed, Pending for task number, Performed by.
-
-### 10.6 Workflow Constraints in MVP
-
-Post-MVP: Conditional triggers, parallel branches, versioning.
-
-### 10.7 No Cross-Organization Sharing
-
-Workflows and checklists shall not be shared between organizations.
-
-### 10.8 AI Automated Checklist Generation
-
-Managers shall have access to an "AI Generate" button when creating checklists.
-The system shall use a Text LLM to generate structured checklist items based on a text prompt (e.g., "Monthly maintenance for 500kVA Diesel Generator").
-The AI shall output structured data including suggested activity descriptions, measurement units, and min/max thresholds.
+---
 
 ## 11. WORK ITEMS / ACTIVITY ITEMS
 
-Each item stored separately.
-Core scheduling fields: Activity number, Planned/Assigned/Deadline/Started/Closed date/time.
-Execution fields: Description, Status (Successful, Failed, Halted, Pending), Predecessor activity number.
-Additional accepted V1 fields: Priority, Estimated/Actual duration, Assigned to, Required skills/certifications/tools/parts, Safety permit required, Risk level, Location override, Attachments, Digital signature, Notes/Comments, Cost, Downtime impact, Linked ticket ID, Completion percentage, Quality check by.
-Measurement fields: Measurements, Measurement units, Min/Max thresholds.
-Measurement Data Type: Measurements shall be typed as Numeric, Text, or Boolean (Pass/Fail).
-Automatic pass/fail based on measurements is post-MVP.
+Each item stored separately. Core fields:
+
+- Activity number, Planned/Assigned/Deadline/Started/Closed date/time.
+- Description, Status (Successful, Failed, Halted, Pending), Predecessor(s).
+- Priority, Estimated/Actual duration, Assigned to, Required skills/certifications/tools/parts.
+- Safety permit, Risk level, Location override, Attachments, Digital signature.
+- Notes/Comments, Cost, Downtime impact, Linked ticket ID, Completion %, Quality check by.
+- **Measurements**: Numeric, Text, or Boolean (Pass/Fail) with min/max thresholds.
+- **Automatic pass/fail** is now **MVP** (system compares numeric measurements against thresholds).
+
+---
 
 ## 12. WORK ORDERS
 
-### 12.1 Work Order Creation
+### 12.1 Creation
+- Cycle triggers WO = a copy of the workflow version with execution dates.
 
-Cycle triggers a work order (a copy of a workflow with date/execution info).
+### 12.2 Identification
+- Unique WO number (auto‑generated, human‑readable).
 
-### 12.2 Work Order Identification
+### 12.3 Dates
+- Issue, Start, Finish, Stop date/time.
 
-Work order number, unique reference.
+### 12.4 Acknowledgment
+- Automatic on user view.
 
-### 12.3 Work Order Date Information
+### 12.5 Rejection
+- Requires description/reason.
 
-Issue, Start, Finish, Stop date/time.
+### 12.6 Snooze
+- Allowed: 1h, 6h, 12h, 1d, 3d, 6d with mandatory reason.
 
-### 12.4 Work Order Acknowledgment
+### 12.7 Work Order Templates (MVP)
+- After completing a WO, a Manager can “Save as Template” – this clones the workflow, checklist, and assigned parts into a reusable template for future cycles.
 
-Automatic on user view.
-
-### 12.5 Work Order Rejection
-
-Requires description / reason.
-
-### 12.6 Work Order Snooze
-
-Requires description. Allowed durations: 1h, 6h, 12h, 1d, 3d, 6d.
+---
 
 ## 13. SAFETY / OPERATIONAL FLAGS
 
-13.1 Cycle Flagging
+| Flag               | Meaning                                                          |
+|--------------------|------------------------------------------------------------------|
+| Hot inspect        | Executed while equipment is running.                             |
+| Pause for inspection | Continue running but stop shortly.                             |
+| Stop until complete | Halt operation until the task is done.                          |
 
-1. Hot inspect. 2. Pause for inspection. 3. Stop until task complete.
+- Service point may halt parent structure only via these flags.
 
-### 13.2 to 13.4 Definitions
+---
 
-Hot inspect: Executed while running.
-Pause: Continue running but stop shortly.
-Stop: Stop operating until done.
+## 14. REPAIR TICKETING SYSTEM (MVP)
 
-### 13.5 Parent Structure Effect
+### 14.1 Creation
+- Operators and Managers create tickets → routed to Maintenance pool.
 
-Service point may halt parent structure. Only maintenance halts / safety flags can stop parents.
+### 14.2 Sections
+- Report section (issue description, photos), Feedback section (resolution notes).
 
-## 14. REPAIR TICKETING SYSTEM
+### 14.3 Circulation Flow
+1. Issue → 2. Maintenance check/do → 3. Maintenance reports → 4. Issuer reviews → 5. Accept/Feedback.  
+- Loops repeat up to 3 times; if unresolved, escalates to Manager.
 
-### 14.1 Ticket Creation
+### 14.4 Priority & Severity
+- Low, Medium, High, Critical – required on creation.
 
-Operator and Manager can issue repair tickets. Sent to Maintenance.
+### 14.5 Assignment Logic
+- Unassigned tickets appear in “Maintenance Pool”.  
+- Maintenance users Claim, or Manager assigns directly.
 
-### 14.2 Ticket Sections
+### 14.6 Overdue Org Restriction
+- Overdue orgs cannot send new tickets.
 
-Report section, Feedback section.
+### 14.7 AI Troubleshooting Copilot
+- When a ticket is opened, the system **automatically suggests** probable causes and repair steps (RAG over manuals + historical WO data).
+- Maintenance user reviews the suggestions, can **edit** them, and **approves** the final action plan before executing.
+- All suggestions and edits are logged for model fine‑tuning.
 
-### 14.3 Ticket Circulation Flow
+---
 
-1. Issue -> 2. Maintenance check/do -> 3. Maintenance reports -> 4. Issuer reviews -> 5. Accept/Feedback.
+## 15. MAINTENANCE SCHEDULES & LAUNCH MODES
 
-### 14.4 Feedback Loop Limit
+- Manager sets auto (1–2x per day) or manual.
+- Reporter can manually advance cycles.
 
-Report / feedback repeated up to 3 times.
+---
 
-### 14.5 Escalation After Failed Loops
+## 16. REPORTING & DASHBOARDS
 
-If unresolved after 3 loops, escalates to Manager. Manager decides to create new ticket or close.
-14.6 Ticket Restrictions for Overdue Organizations
+### 16.1 Access
+- Manager and Reporter.
 
-Overdue organizations cannot send repair tickets.
+### 16.2 Core Dashboards
+- **Live counters**: New/Active WOs, overdue tickets, low‑stock alerts.
+- **Filtering & export** (CSV/PDF) by date, node, status, priority.
+- **Maintenance history timeline** per node (see 19).
 
-### 14.7 Ticket Priority & Severity
+### 16.3 Scheduled Reports (MVP)
+- Manager can schedule weekly/monthly summary reports (PDF) delivered to their email or downloadable from the notification center.
 
-Tickets shall require a priority level upon creation: Low, Medium, High, Critical.
+---
 
-### 14.8 Ticket Assignment Logic
+## 17. NOTIFICATIONS & ANNOUNCEMENTS
 
-Upon creation, tickets route to a "Maintenance Pool" (visible to all Maintenance users).
-A Maintenance user can "Claim" a ticket, or a Manager can manually assign it to a specific user.
+### 17.1 Channels
+- In‑app only (no email/SMS in MVP, except scheduled reports).
 
-## 15. MAINTENANCE SCHEDULES AND LAUNCH MODES
+### 17.2 In‑App Center
+- Persistent bell icon with read/unread states.
+- Deep‑links to relevant WO, ticket, or node.
+- Notifications expire/archive after 30 days.
 
-### 15.1 Manager Setup
+### 17.3 System Announcements (MVP)
+- Managers can post broadcast announcements (e.g., “Plant shutdown on Sunday”) visible to all org users.
 
-Manager creates all database setup and maintenance schedules.
+---
 
-### 15.2 Launch Modes
+## 18. MOBILE / TABLET & QR ACCESS
 
-Automatically (once or twice per day/shift) or Manually.
+- Fully responsive web UI.
+- QR scan opens node data (history, manuals, profile, quick WO creation).
+- **Mobile‑optimized quick actions**: “Complete WO”, “Add Counter Reading”, “Scan QR” – large touch targets.
 
-### 15.3 Reporter Manual Advancement
+---
 
-Reporter can click existing manual cycles to advance them.
+## 19. FILES, STORAGE & MAINTENANCE TIMELINE
 
-## 16. REPORTING AND DASHBOARDS
+### 19.1 Attachments
+- Allowed: JPEG, PNG, PDF, TXT, DOCX; max 10 MB; MIME validation.
 
-### 16.1 Dashboard Users
+### 19.2 Storage
+- Server + S3‑compatible (MinIO) with org‑isolated buckets.
 
-Manager and Reporter access advanced reporting dashboard.
+### 19.3 AI Vector Storage
+- Extracted text from PDFs → embeddings in pgvector (org‑isolated).
 
-### 16.2 Dashboard Details
+### 19.4 Maintenance History / Timeline (MVP)
+- Each node has a **chronological feed** showing all completed WOs, tickets, counter resets, part consumptions, and AI‑suggestion usage – with timestamps and user IDs.
 
-Detailed reporting requirements developed later (must support filtering/export).
+---
 
-### 16.3 User Dashboard Counters
+## 20. SEARCH & NAVIGATION (MVP)
 
-Each user sees number of New and Active work orders.
+- **Global search bar** in header:
+  - Search by node name, WO number, ticket ID, checklist/workflow name, and even **manual content** (RAG full‑text).
+- **Filters** on all list pages (status, priority, date range, assignee).
 
-## 17. NOTIFICATIONS
+---
 
-### 17.1 Notification Channels
+## 21. COMMENTS & INTERNAL CHAT (MVP)
 
-System notifications only. No email/SMS in MVP.
+- Each WO and ticket has a **comment thread** where any assigned user can post messages, @mention others, and attach images.
+- Comments are separate from the formal feedback loop and serve as collaborative history.
 
-### 17.2 Persistent Login
+---
 
-Mobile/tablet web client supports persistent login.
+## 22. AI COPILOT – DETAILED SPECIFICATION (MVP)
 
-### 17.3 System Notifications
+### 22.1 AI Service Architecture
+- Asynchronous tasks (Celery) call external LLM APIs (configurable endpoint/key).
+- **Timeout & retry** with exponential backoff.
+- **Fallback mode**: if external API fails, use a local lightweight model (e.g., sentence‑transformers for retrieval + rule‑based template) to provide a basic suggestion with a clear “fallback” flag.
 
-Examples: New work order, active update, ticket update, snooze expiration.
+### 22.2 AI‑Powered Features (all require human review)
+- **Checklist generation** (from text prompt).
+- **Workflow generation** (including parallel branches and conditional rules).
+- **Troubleshooting/repair suggestions** (RAG + historical WO patterns).
+- **Auto‑fill** of WO descriptions, parts lists, and estimated durations based on similar past WOs.
 
-### 17.4 In-App Notification Center
+### 22.3 Confidence & Explainability
+- Every AI suggestion shows a **confidence score** (0–100%) and a brief **rationale** (e.g., “based on 3 similar WOs for this node type” or “matched manual section 4.2”).
+- Human may override, edit, or reject – each action is logged.
 
-UI shall feature a persistent Notification Bell/Icon in the header.
-Notifications have Read/Unread states.
-Clicking deep-links to the relevant Work Order, Ticket, or Node.
-Notifications expire/archive after 30 days.
+### 22.4 Data Collection for Continuous Learning (MVP)
+- The system stores a **training dataset** with the following fields per interaction:
+  - `org_id` (for isolation), `user_id`, `timestamp`.
+  - `prompt` (original user input).
+  - `ai_raw_output` (full LLM response).
+  - `human_edited_version` (final approved content).
+  - `approval_status` (approved / rejected / edited).
+  - `confidence_score`, `fallback_used`.
+- This dataset is **exportable** (JSONL/Parquet) by System Admin for offline fine‑tuning (LoRA/QLoRA) – ensuring the AI improves rapidly based on real usage.
 
-## 18. MOBILE / TABLET AND QR CODE ACCESS
+### 22.5 Privacy & Multi‑Tenancy
+- When sending prompts to external APIs, the system **strips organization_id and all PII** – only generic equipment types, measurement values, and anonymized text are sent.
+- Alternatively, a local open‑source model can be configured for 100% data privacy.
 
-### 18.1 Mobile/Tablet Accessibility
+---
 
-Accessible from mobile/tablet over internet.
+## 23. BULK IMPORT / EXPORT (MVP)
 
-### 18.2 QR Code Scanning
+- **Import** nodes, cycles, checklists, workflows, and parts via CSV/Excel (with validation and preview before commit).
+- **Export** lists of WOs, tickets, nodes, and parts to CSV/PDF for offline analysis.
 
-Scanning node QR shows node data (history, manuals, profile).
+---
 
-### 18.3 QR / Barcode Capabilities
+## 24. DATA SEEDING & ONBOARDING (MVP)
 
-Generate, print, read / scan.
+- **Pre‑built templates** when creating an organization:
+  - “Facility Management” (HVAC, elevators, lighting).
+  - “Fleet Maintenance” (vehicles, odometer‑based cycles).
+  - “Manufacturing Line” (conveyors, motors, sensors).
+- Each template includes sample zones, systems, cycles, checklists, and parts.
+- A **guided wizard** for first‑time managers to adapt the template (rename, add/remove nodes) before going live.
+- Interactive **tooltips** on key UI sections (Dashboard, WO list, AI Generator, Inventory).
 
-## 19. FILES AND STORAGE
+---
 
-### 19.1 Attachment Types
+## 25. ERROR HANDLING & USER FEEDBACK
 
-Photos, PDF files, Text files.
+- Clear, human‑readable validation messages (e.g., “Cannot delete – has 3 active WOs”).
+- **Toast notifications** for background tasks (AI generation, import, report building) with a progress bar or status icon.
+- A **task status center** where users can see pending async jobs and their results.
 
-### 19.2 Storage Location
+---
 
-Server space + external storage connector (MinIO / S3-compatible).
+## 26. AUDIT LOGGING & UI
 
-### 19.3 Upload Constraints & Security
+### 26.1 Immutable Audit Log (Database)
+- Critical state changes: WO status, ticket escalations, safety flags, role changes, AI approval/rejection, inventory adjustments.
+- Fields: Timestamp, User ID, Action, Entity ID, Previous State, New State, IP address.
 
-Max file size: 10 MB (configurable).
-System shall validate MIME types to block executables (.exe, .sh, .bat).
-Allowed: Images (JPEG, PNG), Documents (PDF, TXT, DOCX).
+### 26.2 Audit Log UI (MVP)
+- Managers can view audit logs filtered by date, user, entity type, and action.
+- Export audit log to CSV.
 
-### 19.4 AI Vector Storage
+---
 
-Text extracted from PDFs for the RAG assistant shall be stored as vector embeddings in PostgreSQL (pgvector) or a dedicated vector index, strictly isolated by organization_id.
+## 27. API, SECURITY & RATE LIMITING
 
-## 20. SECURITY AND ACCESS CONTROL
+- REST API with JWT (access + refresh tokens).
+- RBAC enforced at API level (decorator/middleware).
+- RLS in PostgreSQL for org/sub‑org isolation.
+- Rate limiting: 100 req/min per IP/User (configurable).
+- All endpoints require HTTPS in production.
 
-### 20.1 Authentication
+---
 
-JWT-based.
+## 28. DEPLOYMENT & OPERATIONAL REQUIREMENTS (MVP)
 
-### 20.2 API Architecture
+- **Environment configuration** via `.env` (separate for dev/staging/prod).
+- **Database migrations** using Alembic – automated in CI/CD.
+- **Docker Compose** for local development (Postgres, Redis, MinIO, Celery worker, Celery beat, web app).
+- **Health check** endpoint (`/health`) returning DB, Redis, and AI service status.
+- **Structured JSON logging** – all API requests and background tasks log to stdout for aggregation.
+- **Sentry integration** (or similar) for error tracking – must be configurable.
 
-REST-based.
+---
 
-### 20.3 Organization Isolation
+## 29. POST‑MVP (EXPLICITLY DEFERRED)
 
-Strict isolation. No cross-organization access.
+- SSO/OAuth, MFA/2FA (already noted).
+- Geolocation/maps (only optional zone geolocation field remains).
+- Advanced inventory with purchase orders and supplier management.
+- Mobile native apps (PWA is MVP).
 
-### 20.4 Role Enforcement
+---
 
-RBAC enforced at API level.
+## 30. SUMMARY OF MVP CHANGES VS ORIGINAL
 
-### 20.5 Audit Logging
+| Feature                                         | Status in this document |
+|-------------------------------------------------|-------------------------|
+| Parallel workflows + conditional logic          | ✅ MVP                  |
+| Inventory management (parts, usage, alerts)     | ✅ MVP                  |
+| Seasonal cycles                                 | ✅ MVP                  |
+| Sub‑organizations                               | ✅ MVP                  |
+| AI fine‑tuning data collection                  | ✅ MVP                  |
+| AI copilot (suggest + human review)             | ✅ MVP                  |
+| Bulk import/export                              | ✅ MVP                  |
+| Global search + filters                         | ✅ MVP                  |
+| Comments on WO/tickets                          | ✅ MVP                  |
+| Scheduled reports (email/PDF)                   | ✅ MVP                  |
+| Maintenance timeline per node                   | ✅ MVP                  |
+| System announcements                            | ✅ MVP                  |
+| WO templates                                    | ✅ MVP                  |
+| Mobile quick actions                            | ✅ MVP                  |
+| Soft‑delete restoration                         | ✅ MVP                  |
+| Audit log UI                                    | ✅ MVP                  |
+| AI confidence score + fallback                  | ✅ MVP                  |
+| Onboarding wizards & templates                  | ✅ MVP                  |
+| Deployment essentials (Docker, Alembic, .env)   | ✅ MVP                  |
 
-Immutable audit log for critical state changes (WO status, ticket escalations, safety flags, role changes).
-Log includes: Timestamp, User ID, Action, Entity ID, Previous State, New State.
-
-### 20.6 API Rate Limiting
-
-REST API shall implement rate limiting (e.g., 100 req/min per IP/User) to prevent abuse.
-
-### 20.7 AI Data Privacy & Multi-tenancy
-
-When sending prompts to external LLM APIs, the system shall strip organization_id and PII.
-Only generic equipment types and the specific text/image shall be sent.
-Alternatively, local/open-source models may be used to guarantee 100% data privacy.
-
-## 21. DATABASE DESIGN REQUIREMENTS
-
-### 21.1 Primary Database
-
-PostgreSQL.
-
-### 21.2 Multi-Tenant Design
-
-Strict organization-level isolation (Row-Level Security recommended).
-
-### 21.3 Custom Fields
-
-Organization (2-3), Zone (up to 5).
-
-### 21.4 Hierarchy Support
-
-Zones, Systems, Sub-systems, Service points.
-21.5 Future Inventory Slots
-
-Parts table, spare parts table, service point parts relationship, work order part usage.
-
-### 21.6 Vector Support
-
-Database shall support the pgvector extension to store text embeddings for the RAG Manual Assistant.
-
-## 22. POST-MVP FEATURES
-
-Explicitly postponed:
-Authentication: SSO/OAuth, MFA/2FA.
-Organization: Sub-organizations.
-Geography: Geolocation/maps (limited to optional zone profile field).
-Cycles: Seasonal cycles.
-Workflows: Conditional triggers, parallel branches, versioning.
-Inspection: Automatic pass
+---
