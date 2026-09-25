@@ -246,6 +246,7 @@ Self-checks: registry integrity, event-bus liveness, config validity.
 | **Events emitted** | `org.created/updated`, `invitation.sent/accepted/expired`, `membership.changed`, `payment.overdue/cleared` |
 | **Internal deps** | `CORE`, `DB`, `API`, `AUTH`; `EMAIL` for invitation mail |
 | **Health** | DB + quota query probe |
+| **Superseded (2026‑09‑25)** | Tier, quota and payment state are no longer owned here. They come from the isolated Account Management Service as signed + encrypted entitlements — see `account_management_service.md` and `architecture.md` §6.8. TENANCY keeps organizations, memberships and invitations. |
 
 ## 6.4 `AUDIT` — Immutable Audit Trail
 
@@ -267,6 +268,7 @@ Self-checks: registry integrity, event-bus liveness, config validity.
 | **Events consumed** | most domain events (§11) |
 | **Internal deps** | `CORE`, `DB`, `API`, `CACHE` (unread badge cache) |
 | **Health** | DB probe + listener registration check |
+| **Extended (2026‑09‑25)** | Split into router/policy (levels INFO/WARNING/CRITICAL, category, recipients) and channel/provider adapters (IN_APP, EMAIL, WEB_PUSH, SMS, MOBILE_PUSH, WEBHOOK, optional external gateway), configured via `NOTIFY_*` env settings. Full design: `architecture.md` §16.1–16.7. |
 
 ---
 

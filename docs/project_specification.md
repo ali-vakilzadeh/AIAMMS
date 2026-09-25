@@ -109,15 +109,17 @@ A Manager or Reporter membership on org unit P (without inherit) lets the user s
 - An existing user belonging to **another tenant** sees the invitation. They must leave the current tenant first [ORG-010].
 - An existing user in the **same tenant** gets the membership added immediately on acceptance.
 
-### 3.6 Subscription & payment [COM-003..009]
-- Subscription fields (tenant): tier, effective_from, effective_to, trial_ends_at, payment_state, asset_quota_allocations {org_unit_id: n}.
+### 3.6 Subscription & payment [COM-003..015]
+- Plans, payments and account policies are owned by the Account Management Service (AMS); see `account_management_service.md`. The CMMS stores a cached **entitlement** per tenant: plan (display only), status (TRIAL, CURRENT, OVERDUE, SUSPENDED, CLOSED), period, limits (e.g. `assets.active.max`, `null` = unlimited), features (e.g. `mcp.write`), blocked actions, valid_until, grace_until. `asset_quota_allocations {org_unit_id: n}` stay in the CMMS.
+- Levels, prices and per‑level values: `account level policy.md`. In MVP the AMS returns ENTERPRISE (unlimited) for all tenants.
 - **Asset count** = assets in the tenant where `lifecycle_status != DECOMMISSIONED AND deleted_at IS NULL`.
 - The check runs on: create, restore, recommission, import commit, zone clone. If the result would exceed the limit, the operation is refused with `TIER_LIMIT_REACHED` and the count, limit, and upgrade link.
 - **Quota allocation:** if sub‑org S has an allocation, S's own count (including its descendants) may not exceed it. The sum of allocations may not exceed the tier limit.
-- Payment state transitions: CURRENT → OVERDUE (invoice unpaid past due date) → SUSPENDED (after configurable days, default 30) → CURRENT (payment).
+- Payment state transitions (decided by the AMS, received as entitlement status): CURRENT → OVERDUE (invoice unpaid past due date) → SUSPENDED (after configurable days, default 30) → CURRENT (payment).
   - OVERDUE blocks `ticket.create` only.
   - SUSPENDED blocks every write except payment, data export, and profile.
-- Self‑hosted edition: `TIER_ENFORCEMENT=false` disables all tier and payment checks.
+- Self‑hosted edition: `AMS_MODE=static` supplies a fixed top‑tier entitlement; no AMS is deployed.
+- If the AMS is unreachable, the cached entitlement applies until `grace_until`, then the configured stale policy. Reads and exports are never blocked.
 
 ### 3.7 Work calendar [ORG-016]
 - Fields: working weekdays, shifts (name, start, end; may cross midnight), holidays (date, name fa/en, org unit), timezone.
@@ -943,6 +945,9 @@ tenant, org unit, user, category, severity (INFO, WARNING, CRITICAL), title key 
 ### 19.3 Delivery
 - In‑app via polling (30 s when visible) and server‑sent events (optional).
 - Web push if opted in [NOT-003]. CRITICAL events always push to subscribed devices.
+- Extra channels (email, SMS, mobile push, webhook, external gateway) follow the resolution chain in NOT‑009 and architecture §16.3. The Severity column above is the notification **level** used by that chain.
+- User settings: per category × channel on/off (CRITICAL in‑app and push cannot be turned off), quiet hours (non‑critical external deliveries deferred), verified contact points.
+- Org‑unit policy (Managers): which channels each level may use, within the tenant's entitlement.
 
 ### 19.4 Announcements [NOT-006]
 Fields: title, body (fa/en), audience (org unit, include sub‑orgs, roles), severity, publish_at, expires_at, requires_ack. Acknowledgement is tracked per user, with a report of who has not acknowledged.

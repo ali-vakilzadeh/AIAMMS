@@ -120,23 +120,33 @@ The full MVP scope below is retained. Milestones define **build order**, not sco
 | ID | Requirement | Pri | MS |
 |---|---|---|---|
 | COM-001 | The source code shall be released under an OSI‑approved licence. Proposed: **AGPL‑3.0** (see Open Decisions §33). | M | M1 |
-| COM-002 | Two editions from one codebase: **SaaS** (multi‑tenant, tiers and billing enforced) and **Self‑hosted** (tier enforcement and billing disabled by configuration). | M | M1 |
-| COM-003 | Subscription tiers apply at tenant level: | M | M1 |
+| COM-002 | Two editions from one codebase: **SaaS** (multi‑tenant, tiers and billing enforced via the AMS) and **Self‑hosted** (no AMS; `AMS_MODE=static` grants a fixed top‑tier entitlement). | M | M1 |
+| COM-003 | Account levels apply at tenant level: **Free, Pro, Premium, Enterprise**. Limits, features, prices, trial, and add‑ons are defined in **`account level policy.md`** (the single source). Summary: | M | M1 |
 
-| Tier | Max active assets (whole tenant) | Sub‑orgs | AI monthly quota | MCP |
-|---|---|---|---|---|
-| Free | 100 | 0 | Low | Read‑only |
-| Pro | 1,000 | up to 5 | Medium | Read + write |
-| Ultimate | Unlimited | Unlimited | High / configurable | Read + write |
+| Level | Price | Active assets | Sub‑orgs | Users | AI credits / month | MCP |
+|---|---|---|---|---|---|---|
+| Free | 0 | 100 | 0 | 5 (+ unlimited requesters) | 50 | Read‑only |
+| Pro | 0.20 USD / asset / month | committed quantity, ≤ 1,000 | 2 | Unlimited | 1,000 | Read + write |
+| Premium | 0.25 USD / asset / month | committed quantity, ≤ 10,000 | 20 | Unlimited | 5,000 | Read + write |
+| Enterprise | Negotiable | Contract | Unlimited | Unlimited | Contract | Read + write |
 
 | ID | Requirement | Pri | MS |
 |---|---|---|---|
 | COM-004 | The asset limit counts all assets (including component assets) whose lifecycle status is not DECOMMISSIONED. Zones, systems, and parts do not count. | M | M1 |
 | COM-005 | The root org may allocate asset quotas to sub‑orgs. Unallocated capacity is shared by the whole tenant. | S | M1 |
 | COM-006 | When a tenant exceeds its limit (e.g. after a downgrade), existing assets remain fully usable, but new assets cannot be created until under the limit. No data is deleted. | M | M1 |
-| COM-007 | Billing is implemented behind a payment‑provider abstraction. The concrete provider(s) are an open decision. | M | M1 |
+| COM-007 | Billing, payment providers (which may differ per country), and account policies live in a separate, isolated **Account Management Service (AMS)** (`account_management_service.md`). The CMMS holds no payment data. It only consumes and enforces **entitlements** (plan, status, period, limits, features). | M | M1 |
 | COM-008 | Payment state per tenant: CURRENT, OVERDUE, SUSPENDED. OVERDUE: all features remain active **except creating new repair tickets**. SUSPENDED: read‑only access and data export only. | M | M1 |
-| COM-009 | A new tenant may start with a time‑limited trial of the Pro tier (duration configurable, default 30 days). | C | M1 |
+| COM-009 | A new tenant starts with a 30‑day **Premium reverse trial**, then moves to Free unless a paid level is chosen (`account level policy.md` §7). Trial rules are an AMS policy. | C | Post‑MVP |
+| COM-010 | CMMS ↔ AMS messages use the AMS protocol v1: every request and response is signed (Ed25519 JWS) and then encrypted (X25519 JWE), with replay protection and key rotation. The AMS never returns plaintext. | M | M1 |
+| COM-011 | The CMMS enforces only entitlement keys (limits, features, status, blocked actions), never plan names. New plans or country rules require no CMMS change. | M | M1 |
+| COM-012 | The CMMS keeps a cached, signed entitlement per tenant and continues operating when the AMS is unreachable (grace period, then configurable stale policy). Reads and data export are never blocked by AMS unavailability. | M | M1 |
+| COM-013 | MVP AMS: a protocol‑complete stub that returns the top tier (ENTERPRISE, unlimited) for every tenant. Checkout returns "not available". | M | M1 |
+| COM-014 | The AMS can run in the same deployment or on a separate host/region, and one AMS can serve several CMMS deployments. Relocating either side is a configuration change. | M | M1 |
+| COM-015 | AMS policy engine: plans and prices per country/currency, payment providers per country, invoices, dunning, hosted checkout and billing portal, admin console. | — | Post‑MVP |
+| COM-016 | Charging is **flat per active asset** (COM‑004) on a committed asset quantity chosen by the Owner, with no per‑user charge: Pro 0.20 USD and Premium 0.25 USD per asset per month; Enterprise negotiable. Quantity increases apply immediately (pro rata), decreases at renewal. No automatic overage charges. Details: `account level policy.md` §3. | M | Post‑MVP |
+| COM-017 | The CMMS enforcement registry supports every limit and feature key of `account level policy.md` §4 from M1, so enabling the AMS policy engine needs no CMMS change. | M | M1 |
+| COM-018 | AI usage is metered in **AI credits** (weights per action in `account level policy.md` §6). Exhausted credits block AI requests only (`AI_QUOTA_EXCEEDED`). | M | M5 |
 
 ---
 
@@ -482,6 +492,11 @@ The full MVP scope below is retained. Milestones define **build order**, not sco
 | NOT-005 | Event catalogue (recipients defined in spec §19) includes: WO assigned, due soon, overdue, snooze expired, returned/rejected; ticket new in pool, claimed/assigned, report submitted, feedback, escalated, SLA breach; safety stop activated; low stock; PR/PO awaiting approval, PO approved, parts received; cycle failure; import/export/clone finished; AI job finished; MCP action awaiting confirmation; announcement posted. | M | M2–M5 |
 | NOT-006 | Announcements: Managers post broadcast messages to an org unit (optionally including sub‑orgs), with optional expiry and "must acknowledge" option. | M | M4 |
 | NOT-007 | Task status centre: users see their background jobs (imports, exports, clones, AI jobs, reports) with progress and results. | M | M4 |
+| NOT-008 | Notification delivery is channel‑based (IN_APP, EMAIL, WEB_PUSH, SMS, MOBILE_PUSH, WEBHOOK). Channels and providers are enabled and configured through `.env`; adding a provider needs no domain code change. Architecture in M2; only IN_APP (and WEB_PUSH in M4) are active in MVP. | M | M2 |
+| NOT-009 | Channel selection per notification follows: platform settings (incl. minimum level per channel) → tenant entitlement → org‑unit level→channel policy → user preferences and quiet hours. CRITICAL cannot be muted in‑app or for push. | M | M2 |
+| NOT-010 | Optional external notification server: all non‑in‑app deliveries can be handed to one signed HTTP gateway (`NOTIFY_GATEWAY=external`). | S | Post‑MVP |
+| NOT-011 | Operational SMS with per‑country provider routing and backup provider. Requires a phone number verified by OTP. SMS use is limited by the tenant's entitlement quota. | S | Post‑MVP |
+| NOT-012 | Every external delivery is tracked (pending, sent, delivered, failed, suppressed) with retries; unread CRITICAL notifications escalate to the next configured channel. | S | Post‑MVP |
 
 ---
 
@@ -548,7 +563,7 @@ The full MVP scope below is retained. Milestones define **build order**, not sco
 | AI-007 | **Confidence & rationale:** every suggestion shows a confidence level (High/Medium/Low with 0–100 score) computed as defined in spec §25.3, and a short rationale ("based on 4 similar WOs on Centrifugal Pumps", "manual X p.42"). | M | M5 |
 | AI-008 | Human actions on suggestions (accept, edit, reject + optional reason) are recorded (see AIT). | M | M5 |
 | AI-009 | Reporters may attach suggested edits to AI drafts. Only Managers approve templates, and only Maintenance/Managers approve repair plans. | M | M5 |
-| AI-010 | Provider abstraction: OpenAI‑compatible APIs, Anthropic API, and self‑hosted models (Ollama/vLLM). Chosen per platform, overridable per tenant (Ultimate). | M | M5 |
+| AI-010 | Provider abstraction: OpenAI‑compatible APIs, Anthropic API, and self‑hosted models (Ollama/vLLM). Chosen per platform, overridable per tenant (Enterprise, `ai.privacy_mode`). | M | M5 |
 | AI-011 | **Fallback mode** when the provider is unavailable: retrieval‑only answers (relevant manual passages without generation), and template suggestions assembled from the tenant's similar existing templates. Clearly labelled "fallback". | M | M5 |
 | AI-012 | **Privacy for external providers:** prompts exclude tenant identifiers, user personal data, and addresses. Only equipment/maintenance context is sent. Tenants can require self‑hosted models only (privacy mode). | M | M5 |
 | AI-013 | AI usage quotas per tier (tokens/requests per month), per‑user rate limits, and a usage view for Managers. | M | M5 |
@@ -634,7 +649,7 @@ The full MVP scope below is retained. Milestones define **build order**, not sco
 | NFR-013 | **Observability:** structured JSON logs with request ID, tenant and user IDs; metrics; error tracking (Sentry‑compatible); health endpoints. | M |
 | NFR-014 | **Maintainability:** ≥ 80% unit‑test coverage for domain services. Every requirement ID with priority M has at least one automated acceptance test. | M |
 | NFR-015 | **API:** versioned REST (`/api/v1`) with OpenAPI docs. Breaking changes only in a new version. | M |
-| NFR-016 | **Self‑hosting:** single‑server Docker Compose install in ≤ 30 minutes following the installation guide. | M |
+| NFR-016 | **Self‑hosting:** single‑server Docker Compose install in ≤ 30 minutes following the installation guide. Minimum server without a local LLM: 8 vCPU, 16 GB RAM, 200 GB SSD; recommended 8 vCPU, 32 GB RAM, 500 GB NVMe. | M |
 
 ---
 
@@ -663,7 +678,7 @@ The full MVP scope below is retained. Milestones define **build order**, not sco
 | OPS-004 | Alembic migrations run automatically in CI/CD, and must be backward compatible for rolling deploys. | M |
 | OPS-005 | Health endpoints: `/health/live`, `/health/ready` (DB, Redis, storage, AI provider status). | M |
 | OPS-006 | CI: lint, type check, tests, migration check, image build, dependency and container scanning. CD to staging, and production after manual approval. | M |
-| OPS-007 | Admin console (SYS_ADMIN): tenants, tiers, payment state, support access, failed background jobs, AI provider settings, dataset exports. | M |
+| OPS-007 | Admin console (SYS_ADMIN): tenants, entitlement view (read‑only; plans and payments are managed in the AMS), AMS connection status, support access, failed background jobs and notification deliveries, AI provider settings, dataset exports. | M |
 
 ---
 
@@ -671,7 +686,7 @@ The full MVP scope below is retained. Milestones define **build order**, not sco
 
 - SSO/OAuth, MFA/2FA.
 - Custom roles / permission sets.
-- Operational email/SMS notifications (other than scheduled reports).
+- Operational email/SMS notifications (other than scheduled reports). The channel architecture is built in M2 (NOT‑008, NOT‑009); providers are added later (NOT‑010..012).
 - Full offline mode (beyond MOB‑005).
 - Native mobile apps.
 - IoT / sensor integration and automatic meter feeds; condition‑based triggers from live data.
@@ -692,10 +707,13 @@ Each item has a proposed default that the documents already assume. Confirm or c
 | # | Decision | Proposed default |
 |---|---|---|
 | D1 | Licence | AGPL‑3.0 |
-| D2 | Payment providers for SaaS | Provider abstraction. Initial providers to be chosen by market (e.g. an Iranian gateway for IRR, Stripe for international). |
-| D3 | Default for "contribute anonymized data" (AIT‑004) | ON for Free/Pro, OFF for Ultimate, always changeable by Owner |
-| D4 | Trial | 30‑day Pro trial |
+| D2 | Payment providers for SaaS | Inside the AMS, selected per account country. Initial providers to be chosen by market (e.g. an Iranian gateway for IRR, Stripe for international). |
+| D9 | Plan names, limits, prices | **Decided:** Free / Pro / Premium / Enterprise, per‑asset pricing — see `account level policy.md`. Open items in its §11. |
+| D10 | AMS hosting for SaaS launch | Same Compose/cluster as the CMMS, separate container and database; move out when a second CMMS region exists. |
+| D11 | First SMS provider(s) | To be chosen per market when NOT‑011 is scheduled. |
+| D3 | Default for "contribute anonymized data" (AIT‑004) | ON for Free/Pro/Premium, OFF for Enterprise, always changeable by Owner |
+| D4 | Trial | **Decided:** 30‑day Premium reverse trial, then Free (`account level policy.md` §7) |
 | D5 | Do component assets count toward tier limit? | Yes (COM‑004) |
-| D6 | Default AI provider for SaaS | External provider with self‑hosted option. Privacy mode available on Ultimate. |
+| D6 | Default AI provider for SaaS | External provider with self‑hosted option. Privacy mode available on Enterprise. |
 | D7 | Weekend / holiday defaults for fa tenants | Friday weekend; official Iranian holiday list shipped and editable |
-| D8 | Tier AI quotas (numeric) | To be set after cost modelling |
+| D8 | AI credit weights, credit‑to‑token rate, add‑on prices | Credit amounts per level decided (`account level policy.md` §4). Weights and add‑on prices confirmed after cost modelling in M5. |

@@ -128,6 +128,8 @@ Main capability areas:
 | **Object storage** | Files, manuals, thumbnails, exports, PDFs, import files, training datasets (separate bucket). |
 | **Embedding service** | Stateless HTTP service hosting the embedding model (CPU acceptable for MVP load; GPU optional). |
 | **ClamAV** | Upload scanning. |
+| **Account Management Service (AMS)** | Separate, isolated service (own DB and keys) that owns plans, payments, and account policies. The CMMS only consumes signed + encrypted **entitlements** from it (§6.8, `account_management_service.md`). Replaced by a static adapter in the self‑hosted edition. |
+| **Notification providers** | External delivery channels behind adapters: SMTP/email API, Web Push (VAPID), SMS gateways, mobile push, webhooks, or one external notification server (§16). |
 
 ---
 
@@ -220,9 +222,14 @@ Zone scope is enforced in the **query layer**, not by RLS:
 ### 6.7 Storage isolation
 Object keys are prefixed by tenant and org unit: `t/{tenant_id}/u/{org_unit_id}/{purpose}/{yyyy}/{mm}/{file_id}`. The API only issues pre‑signed URLs after a policy check. Buckets are private.
 
-### 6.8 Tier enforcement
-- `TierService.assert_can_add_assets(tenant, org_unit, n)` counts in‑scope assets using a maintained counter table (`tenant_asset_counts`, updated transactionally by asset lifecycle commands), with a nightly recount.
-- `TIER_ENFORCEMENT=false` for self‑hosted.
+### 6.8 Entitlements & tier enforcement
+- **Commercial logic lives outside the CMMS** in the Account Management Service (AMS). Full design and messaging protocol: `docs/account_management_service.md`.
+- The CMMS `commercial` package holds an `EntitlementPort` with two adapters: `remote` (HTTPS, sign‑then‑encrypt JOSE messages) and `static` (self‑hosted/dev; fixed ENTERPRISE entitlement). Selected by `AMS_MODE`.
+- Entitlements (`plan`, `status`, `limits`, `features`, `blocked_actions`, `valid_until`, `grace_until`, `revision`) are cached in `tenant_entitlements`. **Enforcement reads only this cache**; no request ever waits on the AMS.
+- The CMMS never branches on the plan name. `EntitlementGuard` enforces limit keys (e.g. `assets.active.max`), feature keys (e.g. `mcp.write`), and status effects [COM‑008].
+- `EntitlementGuard.check_limit("assets.active.max", tenant, org_unit, n)` counts in‑scope assets using a maintained counter table (`tenant_asset_counts`, updated transactionally by asset lifecycle commands), with a nightly recount. Sub‑org quota allocations [COM‑005] stay in the CMMS.
+- Refresh: AMS push (`entitlement.changed`) + scheduled refresh + nightly reconcile. If the AMS is unreachable, the cached entitlement is used until `grace_until`, then `AMS_STALE_POLICY` applies. Reads and exports are never blocked.
+- MVP: the AMS is a protocol‑complete stub that returns ENTERPRISE (unlimited) for every tenant.
 
 ---
 
@@ -576,8 +583,112 @@ A nightly job (`inventory` queue) recomputes `Σ ledger.qty` per balance key and
   - AI triggers (e.g. troubleshooting on ticket creation)
   - reorder checks
 - Handlers are idempotent, keyed by event ID.
-- **Delivery:** `GET /notifications` polling (30 s) plus an optional SSE stream `/api/v1/notifications/stream`. Web push via VAPID keys (NOT-003).
+- **In‑app delivery:** `GET /notifications` polling (30 s) plus an optional SSE stream `/api/v1/notifications/stream`.
 - **Retention:** notifications are partitioned monthly. Partitions older than 30 days are archived or dropped by Beat.
+
+### 16.1 Notification module structure
+The `notifications` domain package has two layers, so new channels never touch domain code:
+
+```
+notifications/
+  router.py        # event → category, level, recipients (spec §19.2) → channel resolution
+  policy.py        # the channel resolution chain (§16.3)
+  models.py        # notifications, notification_deliveries, preferences, policies, contact_points
+  templates/       # <category>/<channel>.<lang>.j2
+  channels/        # one class per channel (the "what"): in_app, email, web_push, sms, mobile_push, webhook
+  providers/       # one adapter per external service (the "how"), selected by .env
+  gateway.py       # optional: hand all external deliveries to one external notification server
+```
+
+Pipeline:
+1. A domain event arrives from the outbox.
+2. `router` maps it to a **category** and **level**, and resolves recipients.
+3. `policy` resolves the channel set per recipient.
+4. One transaction inserts the in‑app `notifications` row and one `notification_deliveries` row per extra channel (status `PENDING`), plus one queue job per delivery.
+5. The `notify` queue worker renders the template in the recipient's language, calendar and digit style, and calls the channel → provider adapter.
+6. The provider result or delivery receipt (`/internal/notify/callbacks/{provider}`) updates the delivery status.
+
+### 16.2 Levels and channels
+- **Levels** (ordered): `INFO` < `WARNING` < `CRITICAL` [spec §19.1]. Stored as an ordered enum, so a new level (e.g. `LOW` for digest‑only) can be inserted without schema changes.
+- **Channels:**
+
+| Channel | MVP status | Provider adapters (examples) |
+|---|---|---|
+| `IN_APP` | M2 | built‑in (always on, cannot be disabled) |
+| `EMAIL` | auth flows only (NOT‑002); operational email post‑MVP | reuses the email abstraction: SMTP, email API |
+| `WEB_PUSH` | M4 (NOT‑003) | VAPID Web Push |
+| `SMS` | post‑MVP; adapter slot ready | per‑country SMS gateways (country routing) |
+| `MOBILE_PUSH` | post‑MVP | FCM / APNs (only if native apps are added) |
+| `WEBHOOK` | post‑MVP | tenant‑configured HTTPS endpoint (signed); covers chat tools |
+
+### 16.3 Channel resolution chain
+For each (recipient, notification), a channel is used only if every step allows it:
+
+1. **Platform:** the channel is enabled in `NOTIFY_CHANNELS`, and the level is ≥ `NOTIFY_MIN_LEVEL_<CHANNEL>`.
+2. **Entitlement:** feature `notify.<channel>` is true and quota `notify.<channel>.monthly` is not exhausted (from the AMS, §6.8). Exhausted quota → delivery `SUPPRESSED`, in‑app still delivered.
+3. **Tenant / org‑unit policy:** a level → channels matrix set by Managers. Default: INFO → IN_APP; WARNING → IN_APP + WEB_PUSH; CRITICAL → IN_APP + WEB_PUSH + SMS + EMAIL (each only if enabled).
+4. **User preferences:** per category × channel opt‑in/mute [NOT‑004], quiet hours (non‑critical deliveries are deferred to the end of quiet hours), and a **verified contact point** (phone verified by OTP for SMS, email verified, push subscription active). CRITICAL cannot be muted for IN_APP and WEB_PUSH.
+
+### 16.4 Delivery reliability
+- **Idempotency:** unique `(event_id, user_id, channel)` on `notification_deliveries`.
+- **Retries:** exponential backoff up to `NOTIFY_MAX_RETRIES`, then `FAILED` (visible in the admin console).
+- **CRITICAL escalation:** if a CRITICAL notification is not read within `NOTIFY_CRITICAL_ACK_TIMEOUT_SECONDS`, the next channel in `NOTIFY_CRITICAL_FALLBACK` is tried.
+- **Circuit breaker per provider**; SMS routes may list a backup provider.
+- **Digest:** INFO deliveries on external channels can be batched per user every `NOTIFY_DIGEST_INTERVAL_MINUTES`.
+- **Rate limits** per tenant and channel protect cost and providers.
+- **Metering:** sent SMS/push counts go into the AMS `usage.report`.
+- **Templates:** SMS templates have a length budget (Persian is UCS‑2: 70 characters per segment) and carry a short deep link.
+
+### 16.5 External notification server
+`NOTIFY_GATEWAY=external` sends every non‑in‑app delivery as one normalized, HMAC‑signed HTTP request to `NOTIFY_GATEWAY_URL`:
+```json
+{ "delivery_id": "…", "channel": "SMS", "level": "CRITICAL", "category": "safety.stop",
+  "recipient": { "user_ref": "…", "phone": "+98…", "email": null, "push": [], "locale": "fa" },
+  "rendered": { "title": "…", "body": "…", "link": "https://…" }, "callback_url": "…/internal/notify/callbacks/gateway" }
+```
+This lets a separate notification server (self‑built or an off‑the‑shelf product) take over delivery with no CMMS code change. `NOTIFY_GATEWAY=internal` uses the built‑in channel adapters.
+
+### 16.6 Tables
+```
+notifications(...)                                         -- in-app record, partitioned (existing)
+notification_deliveries(id, notification_id, event_id, user_id, channel, provider, status
+    PENDING|SENT|DELIVERED|READ|FAILED|SUPPRESSED|DEFERRED, attempts, next_attempt_at,
+    provider_message_id, error, created_at, updated_at)    -- partitioned
+    UNIQUE (event_id, user_id, channel)
+notification_policies(org_unit_id, level, channels text[], updated_by, updated_at)
+notification_preferences(user_id, category, channel, enabled, quiet_hours jsonb)
+contact_points(id, user_id, type EMAIL|PHONE|WEB_PUSH|MOBILE_PUSH, value, verified_at, active, meta jsonb)
+tenant_webhooks(id, org_unit_id, url, secret_ref, categories text[], min_level, active)
+```
+
+### 16.7 Configuration
+```
+NOTIFY_CHANNELS=in_app,email,web_push        # platform-enabled channels
+NOTIFY_GATEWAY=internal                      # internal | external
+NOTIFY_GATEWAY_URL=
+NOTIFY_GATEWAY_SECRET=
+NOTIFY_MIN_LEVEL_EMAIL=WARNING
+NOTIFY_MIN_LEVEL_WEB_PUSH=WARNING
+NOTIFY_MIN_LEVEL_SMS=CRITICAL
+NOTIFY_MIN_LEVEL_WEBHOOK=INFO
+NOTIFY_WEB_PUSH_VAPID_PUBLIC_KEY=
+NOTIFY_WEB_PUSH_VAPID_PRIVATE_KEY=
+NOTIFY_WEB_PUSH_SUBJECT=mailto:ops@example.com
+NOTIFY_SMS_ROUTES=IR:sms_ir_main,*:sms_intl  # country → provider id (first match wins)
+NOTIFY_SMS_BACKUP_ROUTES=IR:sms_ir_backup
+NOTIFY_PROVIDER__<ID>__TYPE=                 # adapter class for a provider id
+NOTIFY_PROVIDER__<ID>__URL=
+NOTIFY_PROVIDER__<ID>__API_KEY=
+NOTIFY_PROVIDER__<ID>__SENDER=
+NOTIFY_MOBILE_PUSH_PROVIDER=                 # fcm | apns | (empty)
+NOTIFY_CRITICAL_FALLBACK=web_push,sms,email
+NOTIFY_CRITICAL_ACK_TIMEOUT_SECONDS=300
+NOTIFY_MAX_RETRIES=5
+NOTIFY_DIGEST_INTERVAL_MINUTES=60
+NOTIFY_QUIET_HOURS_DEFAULT=22:00-07:00
+NOTIFY_RETENTION_DAYS=30
+```
+Adding a provider = one adapter class in `providers/` + its `NOTIFY_PROVIDER__<ID>__*` settings.
 
 ---
 
@@ -589,6 +700,8 @@ A nightly job (`inventory` queue) recomputes `Σ ledger.qty` per balance key and
 | Deadline watcher, SLA sweeper, snooze sweeper | scheduler | every 5 min |
 | Outbox dispatcher | default | continuous |
 | Invitation expiry | default | hourly |
+| Notification deliveries (external channels), CRITICAL escalation, digests | notify | on event; escalation check every minute; digest per interval |
+| Entitlement refresh / reconcile, AMS provisioning retry, usage report | default | every 5 min / nightly / on tenant creation / daily |
 | Notification partition maintenance | default | daily |
 | Soft‑delete purge eligibility (30‑day restore window end) | default | daily |
 | Reorder evaluation | inventory | on posting; nightly |
@@ -633,7 +746,7 @@ class EmbeddingProvider(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]
 ```
 - **Implementations:** OpenAI‑compatible (covers vLLM, Ollama's OpenAI endpoint, and hosted OpenAI‑style APIs), Anthropic, and the local embedding service.
-- **Resolution per request:** platform default → tenant override (Ultimate) → privacy mode (self‑hosted only).
+- **Resolution per request:** platform default → tenant override (Enterprise, `ai.privacy_mode`) → privacy mode (self‑hosted only).
 - **Settings:** timeout 60 s; 3 retries with jitter; circuit breaker per provider (Redis). An open circuit triggers fallback [AI-011].
 
 ### 19.2 Prompt registry
@@ -744,7 +857,8 @@ Auth         POST /auth/signup | /auth/verify-email | /auth/login | /auth/refres
 Tenancy      GET/PATCH /org-units/{id} ; POST /org-units (sub-org) ; POST /org-units/{id}/archive|restore
              GET/POST /memberships ; PATCH/DELETE /memberships/{id}
              GET/POST /invitations ; POST /invitations/{token}/accept ; DELETE /invitations/{id}
-             GET /subscription ; POST /subscription/change ; POST /ownership/transfer
+             GET /subscription (cached entitlement + AMS billing summary) ; POST /subscription/checkout
+             (returns AMS-hosted checkout URL) ; POST /ownership/transfer
              GET/PUT /work-calendar ; POST /tenant/export ; POST /tenant/close
 Locations    CRUD /zones ; POST /zones/{id}/clone ; POST /zones/{id}/restore
 Systems      CRUD /systems ; PUT /systems/{id}/zones
@@ -780,6 +894,10 @@ Purchasing   CRUD /vendors ; CRUD /vendors/{id}/parts
              POST /vendor-returns
 Notifications GET /notifications ; POST /notifications/{id}/read ; POST /notifications/read-all
              GET /notifications/stream (SSE) ; POST /push-subscriptions ; CRUD /announcements
+             GET/PUT /me/notification-preferences ; POST /me/contact-points (+ /verify)
+             GET/PUT /org-units/{id}/notification-policy
+Internal     POST /internal/ams/v1/msg (AMS callbacks) ; POST /internal/notify/callbacks/{provider}
+             (delivery receipts) — not under /api, restricted at Nginx
              POST /announcements/{id}/ack
 Reporting    GET /dashboards/me ; GET /kpis ; GET /kpis/consolidated ; GET /reports/{type}
              POST /exports ; CRUD /scheduled-reports ; GET /audit-logs ; POST /audit-logs/export
@@ -868,8 +986,9 @@ Health       GET /health/live ; GET /health/ready
                                       ├── /api/*       → api (FastAPI, Uvicorn/Gunicorn)
                                       ├── /mcp/*       → mcp (restricted)
                                       └── /q/*         → SPA route (QR landing)
-Internal: api, mcp, worker-{scheduler,default,inventory,files,ingestion,ai,reports,imports,training},
+Internal: api, mcp, worker-{scheduler,default,notify,inventory,files,ingestion,ai,reports,imports,training},
           beat, postgres, redis, minio, clamav, embeddings, [ollama|vllm optional]
+Commercial (isolated): ams + ams-db — same stack or a different host/region; reached only via AMS_URL
 ```
 
 ### 26.2 Docker Compose (development & self‑hosted)
@@ -885,9 +1004,10 @@ Services:
 - `minio`
 - `clamav`
 - `embeddings`
+- `ams` + `ams-db` (SaaS profile only; self‑hosted uses `AMS_MODE=static`)
 - optional profiles: `ollama`, `monitoring` (Prometheus/Grafana/Loki), `flower`
 
-A single‑server self‑host is ≤ 30 min with the installation guide [NFR-016]. Minimum spec without a local LLM: 4 vCPU, 8 GB RAM. A local LLM needs its own sizing (GPU recommended).
+A single‑server self‑host is ≤ 30 min with the installation guide [NFR-016]. Minimum spec without a local LLM: 8 vCPU, 16 GB RAM, 200 GB SSD (recommended 32 GB RAM, 500 GB NVMe) — ClamAV and the embedding model alone need ~5–7 GB. A local LLM needs its own sizing (GPU recommended).
 
 ### 26.3 Kubernetes (SaaS)
 - Helm chart with deployments per component.
@@ -899,7 +1019,7 @@ A single‑server self‑host is ≤ 30 min with the installation guide [NFR-016
 ### 26.4 Environments & releases
 - dev / staging / prod with separate secrets.
 - Migrations follow expand‑and‑contract so rolling deploys work [OPS-004].
-- Feature flags: `TIER_ENFORCEMENT`, `BILLING_PROVIDER`, `AI_ENABLED`, `AI_PROVIDER`, `MCP_ENABLED`, `WEB_PUSH_ENABLED`, `CLAMAV_ENABLED`.
+- Feature flags: `AMS_MODE` (remote | static; replaces `TIER_ENFORCEMENT`/`BILLING_PROVIDER`), `NOTIFY_CHANNELS`, `NOTIFY_GATEWAY`, `AI_ENABLED`, `AI_PROVIDER`, `MCP_ENABLED`, `CLAMAV_ENABLED`.
 
 ### 26.5 Backup & recovery
 - **PostgreSQL:** pgBackRest (or managed PITR) with continuous WAL archiving (RPO ≤ 15 min), daily full backups kept 30 days, and a quarterly restore drill [NFR-007].
@@ -924,7 +1044,7 @@ A single‑server self‑host is ≤ 30 min with the installation guide [NFR-016
   - file scan failures
 - **Tracing:** OpenTelemetry (API → DB → worker). Optional exporter.
 - **Error tracking:** Sentry‑compatible, with PII scrubbing.
-- **Health:** `/health/live` (process) and `/health/ready` (DB, Redis, storage, embedding service; AI provider reported as degraded, not failed) [OPS-005].
+- **Health:** `/health/live` (process) and `/health/ready` (DB, Redis, storage, embedding service; AI provider, AMS, and notification providers reported as degraded, not failed) [OPS-005].
 - **Alerts:** scheduler lag > 10 min, queue age > 15 min, reconciliation mismatch, backup failure, error rate > 2%.
 
 ---
@@ -1006,6 +1126,8 @@ A single‑server self‑host is ≤ 30 min with the installation guide [NFR-016
 | ADR‑13 | Broad training data in separate schema/bucket with no back‑references | Non‑addressability by construction |
 | ADR‑14 | MCP tools generated from domain commands | Parity with REST; no second rule set |
 | ADR‑15 | PWA with limited offline command queue | Field connectivity without full offline complexity |
+| ADR‑16 | Commercial logic in a separate Account Management Service; CMMS consumes signed + encrypted entitlements and enforces keys, never plan names | Country‑specific payments and policies change without CMMS releases; AMS can move or serve several CMMS deployments; CMMS keeps running when AMS is down |
+| ADR‑17 | Notifications split into router/policy (domain) and channel/provider adapters selected by `.env`, with an optional external gateway | New channels (SMS, mobile push, webhooks) and per‑country providers are added without touching domain code |
 
 ---
 
