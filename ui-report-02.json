@@ -1,0 +1,116 @@
+{
+  "piece": "Piece 2",
+  "title": "Design System & Core Utilities",
+  "status": "completed",
+  "timestamp": "2024-08-29T13:30:00Z",
+  "files_created": [
+    {
+      "path": "/workspace/cmms-web-ui/src/index.css",
+      "description": "Complete design system CSS variables including spacing scale, layout dimensions, typography, status colors, priority colors, safety levels, role-based colors, semantic colors, border radius, shadows, transitions, z-index layers, and RTL/LTR logical properties"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/lib/cn.ts",
+      "description": "Utility function for merging Tailwind CSS classes with clsx and tailwind-merge"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/lib/constants.ts",
+      "description": "TypeScript enums for UserRole, AssetStatus, WorkOrderStatus, Priority, SafetyLevel, TicketStatus, CycleStatus, NotificationType, PermissionAction, and ResourceType"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/lib/permissions.ts",
+      "description": "Permission system with role hierarchy, default permissions matrix, and helper functions (hasPermission, hasAllPermissions, hasAnyPermission, getRolePermissions, isRoleAtLeast, isRoleHigherThan)"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/components/ui/Button.tsx",
+      "description": "Button component with variants (primary, secondary, outline, ghost, danger, success), sizes (sm, md, lg), loading state, icon support, and fullWidth option"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/components/ui/Input.tsx",
+      "description": "Input component with label, error states, helper text, left/right icons, full accessibility support (aria-invalid, aria-describedby)"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/components/ui/SecureInput.tsx",
+      "description": "Secure password input with show/hide toggle, built-in Button for toggle, accessibility features"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/components/ui/Card.tsx",
+      "description": "Card container with padding options, hoverable state, plus CardHeader, CardContent, CardFooter sub-components"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/components/ui/Badge.tsx",
+      "description": "Badge component with multiple variants (success, warning, error, info, neutral, priority levels), size options, icon support, plus helper functions for status/priority mapping"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/components/ui/Modal.tsx",
+      "description": "Modal dialog with overlay click close, escape key handling, body scroll prevention, multiple sizes, header/footer slots, plus ModalHeader, ModalBody, ModalFooter sub-components"
+    },
+    {
+      "path": "/workspace/cmms-web-ui/src/components/ui/index.ts",
+      "description": "Barrel export file for all UI components"
+    }
+  ],
+  "design_system_features": {
+    "css_variables": {
+      "spacing_scale": "12 steps (space-1 to space-24) based on 4px grid",
+      "layout_dimensions": "header-height, sidebar-width, ai-panel-width, tab-bar-height, tree-band-width",
+      "typography": "font families (Inter, JetBrains Mono), 7 font sizes, 4 font weights, 3 line heights",
+      "status_colors": "5 states (success, warning, error, info, neutral) with light/main/dark variants",
+      "priority_colors": "4 levels (critical, high, medium, low) with light/main/dark variants",
+      "safety_colors": "4 levels (safe, caution, warning, danger) with light/main/dark variants",
+      "role_colors": "5 roles (admin, manager, technician, operator, viewer)",
+      "semantic_colors": "background, border, text, focus states",
+      "border_radius": "6 steps (sm to full)",
+      "shadows": "4 levels (sm to xl)",
+      "transitions": "3 speeds (fast, normal, slow)",
+      "z_index_layers": "7 layers (dropdown to toast)",
+      "rtl_ltr_support": "Logical properties for inline-start/end spacing"
+    },
+    "dark_mode": "Basic dark mode CSS variable overrides defined"
+  },
+  "components_summary": {
+    "total_components": 6,
+    "total_sub_components": 7,
+    "features": [
+      "Full TypeScript typing",
+      "Tailwind CSS styling with cn() utility",
+      "RTL/LTR support via logical properties",
+      "Accessibility attributes (aria-*, roles)",
+      "Keyboard navigation support",
+      "Loading states",
+      "Icon integration (lucide-react)",
+      "Variant systems",
+      "Size options"
+    ]
+  },
+  "utilities_summary": {
+    "cn": "Class name merger using clsx and tailwind-merge",
+    "constants": "10 enums for type-safe values across the application",
+    "permissions": "Complete RBAC system with 6 roles, 6 actions, 8 resource types"
+  },
+  "build_status": {
+    "typescript": "passed",
+    "vite_build": "passed",
+    "output_size": {
+      "html": "0.46 kB",
+      "css": "16.56 kB (4.23 kB gzip)",
+      "js": "148.93 kB (48.19 kB gzip)"
+    }
+  },
+  "notes": [
+    "All components use forwardRef where appropriate for proper React ref handling",
+    "SecureInput includes Eye/EyeOff icons from lucide-react for password visibility toggle",
+    "Badge includes helper functions to map status/priority strings to appropriate variants",
+    "Modal prevents body scroll when open and handles escape key automatically",
+    "All form inputs include proper ARIA attributes for accessibility",
+    "CSS uses logical properties (margin-inline-start, padding-inline-end) for RTL support"
+  ],
+  "recommendations": [
+    "Consider adding a Storybook setup in Piece 3 or 4 for component documentation and testing",
+    "Add more comprehensive form validation utilities for Piece 3 (Auth subsystem)",
+    "Consider creating a Toast/Notification component early as it will be needed for auth feedback",
+    "The permission system could be extended with custom permission hooks for easier component-level checks",
+    "Consider adding data-testid attributes to components for easier E2E testing setup later",
+    "May want to add a Spinner/Loader standalone component for reuse beyond Button loading state"
+  ],
+  "next_piece": "Piece 3: API Client & Auth Subsystem"
+}
