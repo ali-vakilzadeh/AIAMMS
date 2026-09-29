@@ -30,7 +30,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '/docs/presentation/AIAMMS_overview.html'
+          path: 'https://github.com/ali-vakilzadeh/AIAMMS/blob/main/docs/presentation/AIAMMS_overview.html'
 
       - name: Deploy to GitHub Pages
         id: deployment
